@@ -136,15 +136,66 @@ CAMPAIGN_SIGNALS: list[Signal] = [
         setlist_match="Champions League 2023",
         set_id_override="SVP",
     ),
+    # Sibling Pokémon Card Gym distributions other than the boxed Promo
+    # Card Pack: Entry Campaigns (digital-stamp redemption or new-player
+    # onboarding), New Release Battle winner prizes, and events
+    # participation prizes. Each is mechanically different from buying a
+    # Pack, so they get their own distribution_method buckets
+    # (card_gym_campaign / card_gym_event). These sit BEFORE the Promo
+    # Card Pack signals in the list because SVP-237 is listed under both
+    # Pack 9 AND First Entry Campaign — Pack 9 is the dominant
+    # attribution, so Promo Card Pack must write last to win on overlap.
+    # All setlist_match strings include "Card Gym" as a false-positive
+    # guard (verified 2026-05-17: no other context on the SV-P/M-P pages
+    # uses these phrases outside Card Gym entries).
+    Signal(
+        slug="card_gym_entry_campaign_mp",
+        campaign="Pokémon Card Gym Entry Campaign",
+        distribution_method="card_gym_campaign",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Pokémon Card Gym Entry Campaign",
+        set_id_override="MP",
+    ),
+    Signal(
+        slug="card_gym_first_entry_campaign_svp",
+        campaign="Pokémon Card Gym First Entry Campaign",
+        distribution_method="card_gym_campaign",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Card Gym First Entry Campaign",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="card_gym_battle_prize_svp",
+        campaign="Pokémon Card Gym New Release Battle winner prize",
+        distribution_method="card_gym_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Card Gym New Release Battle",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="card_gym_event_prize_svp",
+        campaign="Pokémon Card Gym events participation prize",
+        distribution_method="card_gym_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Card Gym events participation prize",
+        set_id_override="SVP",
+    ),
     # Pokémon Card Gym Promo Card Pack: boxed promo packs sold at
     # participating Pokémon Card Gym stores in Japan. Recurring SKU
     # spanning multiple sets — SV-era ran Packs 1-10 across SV-P, MEGA-era
     # is mid-stream with Packs 1-4 across M-P. setlist_match is the bare
     # phrase; it matches both {{TCGMerch|...|Pokémon Card Gym Promo Card
     # Pack N}} header rows and plain "Pokémon Card Gym Promo Card Pack N"
-    # follow-up rows. Sibling Card Gym distributions (Entry Campaign, NRB
-    # winner prize, events participation prize) use distinct phrases and
-    # are intentionally NOT tagged here — they're different mechanisms.
+    # follow-up rows. Stays at the END of the Card Gym block so it writes
+    # last and wins on LID 237 overlap with First Entry Campaign.
     # Known v1 gap: M-P LID 085 has Pack 4 listed on a bullet-list
     # continuation line; current line-scoped _parse_setlist_keys misses
     # multi-line entries. 1 row out of ~98; revisit if more multi-line
