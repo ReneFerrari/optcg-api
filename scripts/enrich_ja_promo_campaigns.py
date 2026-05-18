@@ -220,6 +220,54 @@ CAMPAIGN_SIGNALS: list[Signal] = [
         setlist_match="Pokémon Card Gym Promo Card Pack",
         set_id_override="SVP",
     ),
+    # Tournament-shaped event promos: Extra Battle Day (recurring one-day
+    # competitive event) and Endorsed Independent Event Trainers Pack
+    # (Pokémon Japan-endorsed local tournaments run by independent
+    # organizers). Both are event-distributed but distinct from Card Gym
+    # in-store events — separate `event_promo` bucket. No overlap with
+    # existing tagged ranges (verified: EBD/EIET LIDs don't collide with
+    # Card Gym Promo Card Pack / Champions League 2023 / Card Gym
+    # sibling LIDs).
+    Signal(
+        slug="extra_battle_day_svp",
+        campaign="Pokémon Extra Battle Day",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Extra Battle Day",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="extra_battle_day_mp",
+        campaign="Pokémon Extra Battle Day",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Extra Battle Day",
+        set_id_override="MP",
+    ),
+    Signal(
+        slug="endorsed_independent_event_svp",
+        campaign="Endorsed Independent Event Trainers Pack",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Endorsed Independent Event Trainers Pack",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="endorsed_independent_event_mp",
+        campaign="Endorsed Independent Event Trainers Pack",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Endorsed Independent Event Trainers Pack",
+        set_id_override="MP",
+    ),
 ]
 
 # Bulbapedia set codes → our promo set_id. Bare codes (no -P) come from
