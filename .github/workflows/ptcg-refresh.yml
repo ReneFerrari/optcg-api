@@ -173,6 +173,21 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node scripts/backfill-ptcg-name-en.js
 
+      # M-P (MEGA era) row catch-up. Bulbapedia's M-P master setlist
+      # grows ahead of TCGdex as new Pokémon Card Gym Promo Card Packs
+      # roll out across 2025–2026 — TCGdex's quarterly cadence means
+      # our D1 lags weeks-to-months. INSERT OR IGNORE places placeholder
+      # rows (name = English) so OPBindr's catalog shows the cards;
+      # TCGdex's UPSERT-shaped weekly import overwrites name + types +
+      # hp + image_high once it picks the cards up. Cheap (~100 rows
+      # ceiling) and idempotent.
+      - name: Catch up M-P promo set rows (Bulbapedia master setlist)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: python -m scripts.backfill_mp_catalog --apply
+
       # Promo campaign tagging — re-applies CAMPAIGN_SIGNALS each week
       # so newly-imported promo rows that fall into a known campaign
       # (Munch reprint, Champions League distribution, Van Gogh-style

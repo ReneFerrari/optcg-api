@@ -22,6 +22,7 @@ scripts/*_batches/
 scripts/backfill_name_en/
 scripts/dedupe_ja/
 scripts/enrich_campaigns/
+scripts/insert_promo_rows/
 scripts/.tmp/
 node_modules/
 .wrangler/
