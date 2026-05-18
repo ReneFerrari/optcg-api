@@ -136,6 +136,46 @@ CAMPAIGN_SIGNALS: list[Signal] = [
         setlist_match="Champions League 2023",
         set_id_override="SVP",
     ),
+    Signal(
+        slug="champions_league_2024",
+        campaign="Champions League 2024",
+        distribution_method="championship_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Champions League 2024",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="champions_league_2025",
+        campaign="Champions League 2025",
+        distribution_method="championship_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Champions League 2025",
+        set_id_override="SVP",
+    ),
+    Signal(
+        slug="champions_league_2026",
+        campaign="Champions League 2026",
+        distribution_method="championship_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Champions League 2026",
+        set_id_override="MP",
+    ),
+    Signal(
+        slug="championship_series_2026_mp",
+        campaign="Pokémon Card Game Championship Series 2026",
+        distribution_method="championship_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Championship Series 2026",
+        set_id_override="MP",
+    ),
     # Sibling Pokémon Card Gym distributions other than the boxed Promo
     # Card Pack: Entry Campaigns (digital-stamp redemption or new-player
     # onboarding), New Release Battle winner prizes, and events
@@ -266,6 +306,33 @@ CAMPAIGN_SIGNALS: list[Signal] = [
         mode="page_setlist",
         bulbapedia_target="M-P Promotional cards (TCG)",
         setlist_match="Endorsed Independent Event Trainers Pack",
+        set_id_override="MP",
+    ),
+    # Victini BWR Competition: tournament event running Promo Card Pack
+    # (paid product, LIDs 272-279) + participation prize (LIDs 280+).
+    # Single substring "Victini BWR Competition" catches both since
+    # they're the same event-distributed semantic; campaign string is
+    # generic so a future split into Pack-only / Prize-only signals
+    # can specialize. Single bucket: event_promo.
+    Signal(
+        slug="victini_bwr_competition_svp",
+        campaign="Victini BWR Competition",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Victini BWR Competition",
+        set_id_override="SVP",
+    ),
+    # Scramble Battle: M-P era casual play event distribution.
+    Signal(
+        slug="scramble_battle_mp",
+        campaign="Scramble Battle",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="M-P Promotional cards (TCG)",
+        setlist_match="Scramble Battle",
         set_id_override="MP",
     ),
     # Illustrator / streetwear collabs on the SV-P era — distinct from
