@@ -1,19 +1,40 @@
 """
-Tag JA promo cards in ptcg_cards with the real-world campaign that
-distributed them (Munch museum collab, McDonald's-by-year, movie-
-commemoration pack, Pokemon Center DX, kuji prize, etc.).
+Tag promo cards in ptcg_cards with the real-world campaign that
+distributed them (Munch museum collab, Van Gogh Museum, McDonald's-by-
+year, Pokemon Center DX, Champions League, kuji prize, etc.).
 
-Source of truth is Bulbapedia's category graph. For each signal in
-CAMPAIGN_SIGNALS we walk Category:<name>, parse "(SET[-P] Promo NNN)"
-out of each member title, normalize SET → our promo set_id (drop the
-dash; bare-SET adds the implicit "P"), and emit a batched UPDATE that
-joins by (UPPER(set_id), CAST(local_id AS INTEGER)). The normalized
-join is non-negotiable here — the 2026-05-16 dedupe bug showed up
-because two pipelines disagreed on case + zero-padding for the same
-physical card. Normalizing at the SQL boundary is the only durable
-defense.
+Source of truth is Bulbapedia. Each Signal in CAMPAIGN_SIGNALS picks
+one of two enumeration modes:
 
-Output: scripts/enrich_campaigns/<NNN>_<campaign_slug>.sql
+  category_title  Walk Category:<name>. Members are pages titled with
+                  the (SET[-P] Promo NNN) suffix and we parse them
+                  directly. Cleanest when Bulbapedia has a dedicated
+                  category for the campaign and members are the promo
+                  prints themselves (Munch's Cards-with-The-Scream,
+                  Van Gogh's Cards-with-Pika-Portrait).
+
+  page_setlist    Fetch one master page's wikitext (e.g.
+                  "SV-P Promotional cards (TCG)") and scan
+                  {{Setlist/entry|NNN/SET-TOKEN|...|<campaign-text>}}
+                  lines. Any row whose body contains
+                  signal.setlist_match is tagged. Needed when the
+                  campaign isn't categorized — Bulbapedia stores
+                  Champions League 2023 only as setlist-row prose on
+                  the SV-P master page, no per-card category.
+
+Each Signal also carries `lang` so the UPDATE WHERE clause matches the
+right language partition. This is non-negotiable post-Van Gogh:
+`svp-085` lang=en (Pikachu with Grey Felt Hat, Van Gogh Museum) and
+`SVP-85` lang=ja (Basic Darkness Energy) share the same (set_id,
+local_id) and would collide if we matched cross-language. See
+feedback_no_local_id_collision.md.
+
+The UPDATE join is `(UPPER(set_id), CAST(local_id AS INTEGER))` — the
+2026-05-16 dedupe bug came from two ingest pipelines disagreeing on
+case + zero-padding for the same physical card. Normalize at the SQL
+boundary, not later.
+
+Output: scripts/enrich_campaigns/<slug>_<NNN>.sql
 
 Usage:
     python -m scripts.enrich_ja_promo_campaigns --dry-run
@@ -24,14 +45,6 @@ Usage:
 
     python -m scripts.enrich_ja_promo_campaigns --campaigns munch --apply
         Limit to a single campaign slug (good for validation runs).
-
-CAMPAIGN_SIGNALS today is intentionally short — start with what
-Bulbapedia categorizes cleanly via title-parseable promo numbers
-(Munch's "Cards with The Scream" is the canonical clean example).
-Campaigns whose Bulbapedia category lists *main-set* card pages
-instead of promo prints (McDonald's-Collection-YYYY, most movie
-commemorations) need the wikitext-infobox parser path — that's
-Phase 1a-2.
 """
 
 from __future__ import annotations
@@ -45,7 +58,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Optional
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -57,24 +72,71 @@ BULBAPEDIA_API = "https://bulbapedia.bulbagarden.net/w/api.php"
 USER_AGENT = "OPBindr-Bot/1.0 (contact: arjun@neuroplexlabs.com)"
 RATE_LIMIT_SECONDS = 1.1  # MediaWiki etiquette — single-threaded ~1 req/sec
 
-# Signal map: Bulbapedia category title → (slug, campaign, distribution_method).
-#
-# slug                drives the output filename + the --campaigns filter
-# campaign            user-facing free-text label written to ptcg_cards.campaign
-# distribution_method coarse classifier written to ptcg_cards.distribution_method;
-#                     keep the vocab small (see migration 015 header).
-#
-# Only include a category here if its members are titled (SET[-P] Promo N)
-# — i.e. each page IS the promo print. Bulbapedia's bookkeeping
-# sometimes lists the canonical-card page (titled with the main set)
-# instead; those need the wikitext-infobox path.
-CAMPAIGN_SIGNALS: dict[str, tuple[str, str, str]] = {
-    "Cards with The Scream": (
-        "munch",
-        "Munch x Pokémon",
-        "art_museum_collaboration",
+Mode = Literal["category_title", "page_setlist"]
+
+
+@dataclass(frozen=True)
+class Signal:
+    """One campaign tag and how to enumerate its members on Bulbapedia.
+
+    slug                drives the output filename + the --campaigns filter
+    campaign            free-text label stamped into ptcg_cards.campaign
+    distribution_method coarse classifier stamped into ptcg_cards.distribution_method
+                        (keep the vocab small — see migration 015 header)
+    lang                'ja' or 'en' — added to UPDATE WHERE; never matches
+                        cross-language because svp-085 lang=en and SVP-85
+                        lang=ja are different cards
+    mode                category_title | page_setlist
+    bulbapedia_target   For category_title: category name (no 'Category:' prefix).
+                        For page_setlist:   page name to fetch wikitext for.
+    setlist_match       page_setlist only. Substring required in a setlist
+                        entry line for it to count as part of this campaign.
+                        Free-text — e.g. "Champions League 2023".
+    set_id_override     page_setlist only. The D1 set_id to use for every
+                        matched row in this page (master pages don't carry
+                        per-row set ids — they're implicit from the page).
+    """
+    slug: str
+    campaign: str
+    distribution_method: str
+    lang: str
+    mode: Mode
+    bulbapedia_target: str
+    setlist_match: Optional[str] = None
+    set_id_override: Optional[str] = None
+
+
+# Order matters for last-write-wins UX: signals later in the list will
+# overwrite a card's campaign tag if both apply. Keep cleanest signals
+# (specific museum collabs) before broader ones (championship events).
+CAMPAIGN_SIGNALS: list[Signal] = [
+    Signal(
+        slug="munch",
+        campaign="Munch x Pokémon",
+        distribution_method="art_museum_collaboration",
+        lang="ja",
+        mode="category_title",
+        bulbapedia_target="Cards with The Scream",
     ),
-}
+    Signal(
+        slug="van_gogh",
+        campaign="Pokémon × Van Gogh Museum",
+        distribution_method="art_museum_collaboration",
+        lang="en",
+        mode="category_title",
+        bulbapedia_target="Cards with Pika-Portrait",
+    ),
+    Signal(
+        slug="champions_league_2023",
+        campaign="Champions League 2023",
+        distribution_method="championship_event",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="Champions League 2023",
+        set_id_override="SVP",
+    ),
+]
 
 # Bulbapedia set codes → our promo set_id. Bare codes (no -P) come from
 # titles that use the loose "(SM Promo 244)" form; for promo prints
@@ -89,8 +151,13 @@ _SET_OVERRIDES: dict[str, str] = {
 }
 
 # Regex: "(SM-P Promo 288)" or "(SV-P Promo 12)" or "(SM Promo 244)".
-# Group 1 captures the set token (with optional -P), group 2 the number.
 _TITLE_RE = re.compile(r"\(([A-Z]+(?:-P)?)\s+Promo\s+(\d+)\)\s*$")
+
+# Setlist row leader: {{Setlist/entry|NNN/...   or  {{Setlist/nmentry|NNN/...
+# Only captures local_id — the per-row set token is informational on
+# master pages (it's "SV-P" everywhere on the SV-P page), so we rely
+# on Signal.set_id_override instead of re-parsing it.
+_SETLIST_LINE_RE = re.compile(r"^\{\{Setlist/(?:entry|nmentry)\|(\d+)/")
 
 
 def main() -> None:
@@ -106,24 +173,37 @@ def main() -> None:
     args = ap.parse_args()
 
     wanted = {s.strip().lower() for s in args.campaigns.split(",") if s.strip()}
-    signals = [(cat, slug, camp, dist)
-               for cat, (slug, camp, dist) in CAMPAIGN_SIGNALS.items()
-               if not wanted or slug in wanted]
+    signals = [s for s in CAMPAIGN_SIGNALS if not wanted or s.slug in wanted]
     if not signals:
         print(f"No signals matched --campaigns={args.campaigns!r}. "
-              f"Available slugs: {sorted(s[0] for s in CAMPAIGN_SIGNALS.values())}")
+              f"Available slugs: {sorted(s.slug for s in CAMPAIGN_SIGNALS)}")
         sys.exit(1)
 
-    print(f"1. Crawling {len(signals)} Bulbapedia campaign categor"
-          f"{'y' if len(signals) == 1 else 'ies'}...")
-    all_updates: list[tuple[str, str, str, list[tuple[str, int]]]] = []
-    for category, slug, campaign, dist in signals:
-        members = _fetch_category_members(category)
-        keys = list(_parse_promo_keys(members))
-        print(f"   {category}: {len(members)} members, {len(keys)} promo "
-              f"prints → campaign={campaign!r}, dist={dist!r}")
+    print(f"1. Crawling {len(signals)} Bulbapedia target"
+          f"{'' if len(signals) == 1 else 's'}...")
+    all_updates: list[tuple[Signal, list[tuple[str, int]]]] = []
+    for s in signals:
+        if s.mode == "category_title":
+            members = _fetch_category_members(s.bulbapedia_target)
+            keys = list(_parse_promo_keys(members))
+            print(f"   [category_title] Category:{s.bulbapedia_target}: "
+                  f"{len(members)} members, {len(keys)} promo prints "
+                  f"→ slug={s.slug!r} lang={s.lang!r}")
+        elif s.mode == "page_setlist":
+            if not s.setlist_match or not s.set_id_override:
+                raise ValueError(f"signal {s.slug!r} mode=page_setlist requires "
+                                 f"setlist_match + set_id_override")
+            wt = _fetch_page_wikitext(s.bulbapedia_target)
+            keys = list(_parse_setlist_keys(wt, s))
+            print(f"   [page_setlist]    {s.bulbapedia_target}: "
+                  f"{len(keys)} rows matched {s.setlist_match!r} "
+                  f"→ slug={s.slug!r} lang={s.lang!r} "
+                  f"set_id={s.set_id_override}")
+        else:
+            raise ValueError(f"unknown mode: {s.mode!r}")
         if keys:
-            all_updates.append((slug, campaign, dist, keys))
+            all_updates.append((s, keys))
+        time.sleep(RATE_LIMIT_SECONDS)
 
     if not all_updates:
         print("Nothing to write.")
@@ -185,7 +265,7 @@ def _parse_promo_keys(titles: list[str]) -> list[tuple[str, int]]:
 
     Skips titles that don't fit the (SET[-P] Promo N) suffix — those
     are canonical-card pages reprinted as promos, and need the
-    wikitext path that isn't built yet.
+    page_setlist path instead.
     """
     out: list[tuple[str, int]] = []
     skipped = 0
@@ -211,28 +291,82 @@ def _parse_promo_keys(titles: list[str]) -> list[tuple[str, int]]:
     return out
 
 
-def _write_batches(updates: list[tuple[str, str, str, list[tuple[str, int]]]]
+def _fetch_page_wikitext(page: str) -> str:
+    """Fetch raw wikitext for a single Bulbapedia page."""
+    data = _api_get({
+        "action": "parse",
+        "page": page,
+        "prop": "wikitext",
+        "format": "json",
+    })
+    wt = data.get("parse", {}).get("wikitext", {}).get("*")
+    if not wt:
+        print(f"   warn: no wikitext returned for page {page!r}")
+        return ""
+    return wt
+
+
+def _parse_setlist_keys(wikitext: str, signal: Signal) -> list[tuple[str, int]]:
+    """Scan a master page's wikitext for setlist entries and emit
+    (set_id, local_id_int) for each row whose body contains
+    signal.setlist_match.
+
+    Master pages like 'SV-P Promotional cards (TCG)' have one row per
+    line shaped:
+        {{Setlist/entry|NNN/SET-TOKEN|...|<campaign-text>}}
+    where <campaign-text> describes one or more distribution events.
+    We treat the whole entry line as a haystack and look for
+    setlist_match as a substring — robust to the wikilink, template,
+    and reference variations Bulbapedia uses inside <campaign-text>.
+    """
+    matched = 0
+    out: list[tuple[str, int]] = []
+    for raw_line in wikitext.split("\n"):
+        line = raw_line.strip()
+        if not (line.startswith("{{Setlist/entry") or
+                line.startswith("{{Setlist/nmentry")):
+            continue
+        m = _SETLIST_LINE_RE.match(line)
+        if not m:
+            continue
+        if signal.setlist_match not in line:
+            continue
+        try:
+            local_id = int(m.group(1))
+        except ValueError:
+            continue
+        matched += 1
+        out.append((signal.set_id_override, local_id))  # type: ignore[arg-type]
+    if matched == 0:
+        print(f"     warn: 0 setlist rows matched — check setlist_match "
+              f"{signal.setlist_match!r} against the page")
+    return out
+
+
+def _write_batches(updates: list[tuple[Signal, list[tuple[str, int]]]]
                    ) -> list[Path]:
     """One SQL file per campaign per batch. Each UPDATE joins by
-    (UPPER(set_id), CAST(local_id AS INTEGER)) so case + zero-padding
-    differences across ingest pipelines can't cause silent misses.
+    (lang, UPPER(set_id), CAST(local_id AS INTEGER)) so case +
+    zero-padding differences across ingest pipelines can't cause silent
+    misses, and lang stays partitioned to defend against the
+    cross-region lid collision (svp-085 EN vs SVP-85 JA).
     """
     files: list[Path] = []
-    for slug, campaign, dist, keys in updates:
+    for sig, keys in updates:
         stmts = []
         for set_id, local_id in keys:
             stmts.append(
                 "UPDATE ptcg_cards SET "
-                f"campaign = {_esc(campaign)}, "
-                f"distribution_method = {_esc(dist)} "
-                f"WHERE lang = 'ja' "
+                f"campaign = {_esc(sig.campaign)}, "
+                f"distribution_method = {_esc(sig.distribution_method)} "
+                f"WHERE lang = {_esc(sig.lang)} "
                 f"AND UPPER(set_id) = {_esc(set_id.upper())} "
                 f"AND CAST(local_id AS INTEGER) = {local_id};"
             )
         for i in range(0, len(stmts), BATCH_SIZE):
             batch = stmts[i:i + BATCH_SIZE]
             idx = (i // BATCH_SIZE) + 1
-            path = OUT_DIR / f"{slug}_{idx:03d}.sql"
+            path = OUT_DIR / f"{sig.slug}_{idx:03d}.sql"
             path.write_text("\n".join(batch) + "\n", encoding="utf-8")
             files.append(path)
     return files

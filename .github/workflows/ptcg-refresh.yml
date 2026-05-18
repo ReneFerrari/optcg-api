@@ -173,14 +173,18 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: node scripts/backfill-ptcg-name-en.js
 
-      # JA promo campaign tagging — re-applies CAMPAIGN_SIGNALS each
-      # week so newly-imported promo rows that fall into a known
-      # campaign (e.g. a future Munch reprint) get tagged without a
-      # manual run. UPDATE-only, joined on (UPPER(set_id),
+      # Promo campaign tagging — re-applies CAMPAIGN_SIGNALS each week
+      # so newly-imported promo rows that fall into a known campaign
+      # (Munch reprint, Champions League distribution, Van Gogh-style
+      # museum collab, etc.) get tagged without a manual run. Each
+      # signal carries its own lang, so EN-only campaigns like Van
+      # Gogh's svp-085 don't bleed onto JA's SVP-85 (Basic Darkness
+      # Energy) — different cards sharing the normalized lid.
+      # UPDATE-only, joined on (lang, UPPER(set_id),
       # CAST(local_id AS INTEGER)) so the case/zfill collision pattern
       # the 2026-05-16 JA dedupe surfaced can't recur. Idempotent;
       # safe to retry.
-      - name: Enrich JA promo campaign metadata (Bulbapedia)
+      - name: Enrich promo campaign metadata (Bulbapedia)
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
