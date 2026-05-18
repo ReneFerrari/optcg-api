@@ -439,6 +439,26 @@ CAMPAIGN_SIGNALS: list[Signal] = [
         setlist_match="Let's Start Playing",
         set_id_override="SVP",
     ),
+    # ex Starter Sets: the SV1-launch retail starter decks (Fuecoco &
+    # Ampharos / Quaxly & Mimikyu / Sprigatito & Lucario / Pikachu &
+    # Pawmot) each shipped with a Promo Card Pack. The 8 cards on LIDs
+    # 2-9 are dual-distributed with Let's Start Playing; LID 13 (Rotom)
+    # is ex Starter Set only. Sits AFTER lets_start_playing_svp so the
+    # more specific retail-product attribution wins on overlap.
+    # Substring "ex Starter Set" catches both singular and plural
+    # ("ex Starter Sets Promo Card Pack"). Stays in event_promo bucket
+    # to avoid new filter-pill vocab; the campaign string preserves
+    # the distinct attribution for search.
+    Signal(
+        slug="ex_starter_sets_svp",
+        campaign="ex Starter Sets",
+        distribution_method="event_promo",
+        lang="ja",
+        mode="page_setlist",
+        bulbapedia_target="SV-P Promotional cards (TCG)",
+        setlist_match="ex Starter Set",
+        set_id_override="SVP",
+    ),
     # Pokémon Card Summer Is Here: 2024 summer campaign distribution.
     Signal(
         slug="pokemon_summer_is_here_svp",
