@@ -58,6 +58,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
@@ -236,10 +237,10 @@ CAMPAIGN_SIGNALS: list[Signal] = [
     # Pack N}} header rows and plain "Pokémon Card Gym Promo Card Pack N"
     # follow-up rows. Stays at the END of the Card Gym block so it writes
     # last and wins on LID 237 overlap with First Entry Campaign.
-    # Known v1 gap: M-P LID 085 has Pack 4 listed on a bullet-list
-    # continuation line; current line-scoped _parse_setlist_keys misses
-    # multi-line entries. 1 row out of ~98; revisit if more multi-line
-    # signals show up.
+    # Multi-line entries are handled — M-P LID 85 has Pack 4 on a
+    # bullet-list continuation line that _iter_setlist_entries walks
+    # via brace-depth scoping, so this signal now covers it alongside
+    # the Entry Campaign on line 100 (Pack writes last → wins).
     Signal(
         slug="card_gym_promo_pack_mp",
         campaign="Pokémon Card Gym Promo Card Pack",
@@ -625,34 +626,78 @@ def _fetch_page_wikitext(page: str) -> str:
     return wt
 
 
-def _parse_setlist_keys(wikitext: str, signal: Signal) -> list[tuple[str, int]]:
-    """Scan a master page's wikitext for setlist entries and emit
-    (set_id, local_id_int) for each row whose body contains
-    signal.setlist_match.
+def _iter_setlist_entries(wikitext: str) -> Iterator[tuple[int, str]]:
+    """Yield (local_id, body) for each {{Setlist/entry|...}} or
+    {{Setlist/nmentry|...}} template in the wikitext.
 
-    Master pages like 'SV-P Promotional cards (TCG)' have one row per
-    line shaped:
-        {{Setlist/entry|NNN/SET-TOKEN|...|<campaign-text>}}
-    where <campaign-text> describes one or more distribution events.
-    We treat the whole entry line as a haystack and look for
-    setlist_match as a substring — robust to the wikilink, template,
-    and reference variations Bulbapedia uses inside <campaign-text>.
+    The body is the joined text from the opener line through the
+    closer line (net {{ vs }} depth returns to zero), so bullet-list
+    continuation lines on multi-line entries are visible to a
+    substring check downstream. Example — M-P LID 85 spans 3 lines:
+
+        {{Setlist/entry|085/M-P|J|{{TCG ID|...|85}}|Item|||
+        * Pokémon Card Gym Entry Campaign...
+        * Pokémon Card Gym Promo Card Pack 4...}}
+
+    The previous line-scoped parser saw only the opener and missed
+    both distributions.
+
+    Brace counting uses the `{{`/`}}` double-brace pair that wiki
+    templates require; bare `{`/`}` are ignored. If an entry has
+    unbalanced braces (malformed wikitext) the body is emitted at
+    EOF so we never hang.
     """
-    matched = 0
-    out: list[tuple[str, int]] = []
-    for raw_line in wikitext.split("\n"):
-        line = raw_line.strip()
+    lines = wikitext.split("\n")
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i].lstrip()
         if not (line.startswith("{{Setlist/entry") or
                 line.startswith("{{Setlist/nmentry")):
+            i += 1
             continue
         m = _SETLIST_LINE_RE.match(line)
         if not m:
-            continue
-        if signal.setlist_match not in line:
+            i += 1
             continue
         try:
             local_id = int(m.group(1))
         except ValueError:
+            i += 1
+            continue
+        depth = 0
+        body_parts: list[str] = []
+        j = i
+        closed = False
+        while j < n:
+            ln = lines[j]
+            body_parts.append(ln)
+            depth += ln.count("{{") - ln.count("}}")
+            if depth <= 0:
+                yield (local_id, "\n".join(body_parts))
+                i = j + 1
+                closed = True
+                break
+            j += 1
+        if not closed:
+            # Unbalanced — emit partial body and stop scanning.
+            yield (local_id, "\n".join(body_parts))
+            return
+
+
+def _parse_setlist_keys(wikitext: str, signal: Signal) -> list[tuple[str, int]]:
+    """Scan a master page's wikitext for setlist entries and emit
+    (set_id, local_id_int) for each entry whose body contains
+    signal.setlist_match.
+
+    Entries are brace-depth-scoped (see _iter_setlist_entries), so a
+    continuation line that carries the campaign attribution (M-P LID
+    85's bullet-list Pack 4 entry) is part of the haystack.
+    """
+    matched = 0
+    out: list[tuple[str, int]] = []
+    for local_id, body in _iter_setlist_entries(wikitext):
+        if signal.setlist_match not in body:
             continue
         matched += 1
         out.append((signal.set_id_override, local_id))  # type: ignore[arg-type]
