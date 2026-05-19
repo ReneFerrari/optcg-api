@@ -24,11 +24,12 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 import time
 import urllib.parse
 import urllib.request
+
+from scripts.wrangler_retry import run_wrangler
 from collections import defaultdict
 from pathlib import Path
 
@@ -195,8 +196,9 @@ def main() -> None:
         return
 
     print(f"Executing {len(sql_lines)} UPDATEs against remote D1...")
-    r = subprocess.run(WRANGLER + ["--remote", f"--file={sql_file}"])
+    r = run_wrangler(WRANGLER + ["--remote", f"--file={sql_file}"])
     if r.returncode != 0:
+        print("Execute failed:", (r.stderr or "")[:400])
         sys.exit(r.returncode)
     print("Done.")
 
@@ -418,10 +420,7 @@ def api_get(params: dict) -> dict:
 
 
 def query_d1(sql: str) -> list[dict]:
-    out = subprocess.run(
-        WRANGLER + ["--remote", "--json", "--command", sql],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
+    out = run_wrangler(WRANGLER + ["--remote", "--json", "--command", sql])
     if out.returncode != 0:
         print("D1 query failed:", (out.stderr or "")[:500])
         sys.exit(1)

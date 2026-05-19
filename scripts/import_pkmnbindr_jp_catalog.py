@@ -39,12 +39,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 import httpx
+
+from scripts.wrangler_retry import run_wrangler
 
 
 DB_NAME = "optcg-cards"
@@ -197,9 +198,9 @@ def main() -> None:
         return
 
     print("\n5. Executing against remote D1...")
-    result = subprocess.run(WRANGLER_BIN + ["--remote", f"--file={sql_path}"])
+    result = run_wrangler(WRANGLER_BIN + ["--remote", f"--file={sql_path}"])
     if result.returncode != 0:
-        print("Execute failed.")
+        print("Execute failed:", (result.stderr or "")[:400])
         sys.exit(result.returncode)
     print("Done.")
 
@@ -215,10 +216,7 @@ def query_existing_card_ids() -> set[tuple[str, str]]:
     """
     sql = ("SELECT card_id, set_id, local_id, lang FROM ptcg_cards "
            "WHERE lang = 'ja'")
-    out = subprocess.run(
-        WRANGLER_BIN + ["--remote", "--json", "--command", sql],
-        capture_output=True, text=True,
-    )
+    out = run_wrangler(WRANGLER_BIN + ["--remote", "--json", "--command", sql])
     if out.returncode != 0:
         print("D1 query failed:", out.stderr[:500])
         sys.exit(1)

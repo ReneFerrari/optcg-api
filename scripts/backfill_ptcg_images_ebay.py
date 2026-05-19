@@ -39,7 +39,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 from collections import Counter
@@ -48,6 +47,7 @@ from pathlib import Path
 import httpx
 
 from scripts.ebay_client import EbayClient, apply_title_filters
+from scripts.wrangler_retry import run_wrangler
 
 
 DB_NAME = "optcg-cards"
@@ -125,9 +125,9 @@ def main() -> None:
         return
 
     print(f"\n5. Executing {len(sql_lines)} UPDATEs against remote D1...")
-    result = subprocess.run(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
+    result = run_wrangler(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
     if result.returncode != 0:
-        print("Execute failed.")
+        print("Execute failed:", (result.stderr or "")[:400])
         sys.exit(result.returncode)
     print("Done.")
 
@@ -138,11 +138,7 @@ def query_imageless_cards(lang: str) -> list[dict]:
         f"WHERE lang = '{lang}' AND image_high IS NULL "
         f"ORDER BY set_id, local_id"
     )
-    out = subprocess.run(
-        WRANGLER_BIN + ["--remote", "--json", "--command", sql],
-        capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
+    out = run_wrangler(WRANGLER_BIN + ["--remote", "--json", "--command", sql])
     if out.returncode != 0:
         print("D1 query failed:", (out.stderr or "")[:500])
         sys.exit(1)

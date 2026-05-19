@@ -38,13 +38,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
+
+from scripts.wrangler_retry import run_wrangler
 
 
 API = "https://archives.bulbagarden.net/w/api.php"
@@ -200,19 +201,15 @@ def main() -> None:
         return
 
     print(f"\n5. Executing {len(sql_lines)} UPDATEs against remote D1...")
-    result = subprocess.run(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
+    result = run_wrangler(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
     if result.returncode != 0:
-        print("Execute failed.")
+        print("Execute failed:", (result.stderr or "")[:400])
         sys.exit(result.returncode)
     print("Done.")
 
 
 def query_d1(sql: str) -> list[dict]:
-    out = subprocess.run(
-        WRANGLER_BIN + ["--remote", "--json", "--command", sql],
-        capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
+    out = run_wrangler(WRANGLER_BIN + ["--remote", "--json", "--command", sql])
     if out.returncode != 0:
         print("D1 query failed:", (out.stderr or "")[:500])
         sys.exit(1)

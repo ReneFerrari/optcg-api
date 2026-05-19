@@ -40,7 +40,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 import urllib.request
@@ -48,6 +47,8 @@ from pathlib import Path
 
 import httpx
 from bs4 import BeautifulSoup
+
+from scripts.wrangler_retry import run_wrangler
 
 
 DB_NAME = "optcg-cards"
@@ -152,8 +153,9 @@ def main() -> None:
         return
 
     print(f"\nExecuting against remote D1...")
-    result = subprocess.run(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
+    result = run_wrangler(WRANGLER_BIN + ["--remote", f"--file={sql_file}"])
     if result.returncode != 0:
+        print("Execute failed:", (result.stderr or "")[:400])
         sys.exit(result.returncode)
     print("Done.")
 
