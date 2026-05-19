@@ -107,6 +107,45 @@ def _strip_wrangler_chrome(stdout: str) -> str:
     return stdout
 
 
+def insert_sql(
+    card_id: str,
+    set_id: str,
+    local_id: str,
+    name_ja: str,
+    image_url: str | None,
+    pricing_json: str | None,
+    price_source: str | None,
+) -> str:
+    """Build one INSERT OR IGNORE statement for a Yuyutei-sourced row.
+
+    pricing_json is the already-JSON-encoded {"yuyutei": {...}} string,
+    or None for sold-out products. price_source is 'yuyutei' for
+    in-stock priced products, None for sold-out.
+    """
+    return (
+        "INSERT OR IGNORE INTO ptcg_cards "
+        "(card_id, lang, set_id, local_id, name, image_high, image_low, pricing_json, price_source) "
+        "VALUES ("
+        + _esc(card_id) + ", "
+        + _esc(TARGET_LANG) + ", "
+        + _esc(set_id) + ", "
+        + _esc(local_id) + ", "
+        + _esc(name_ja) + ", "
+        + _esc(image_url) + ", "
+        + _esc(image_url) + ", "
+        + (_esc(pricing_json) if pricing_json is not None else "NULL") + ", "
+        + _esc(price_source) + ");"
+    )
+
+
+def _esc(v) -> str:
+    if v is None:
+        return "NULL"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", help="Only run this TCGdex set id (e.g. SV10)")
@@ -119,9 +158,151 @@ def main() -> None:
                    help="Fetch + parse + diff + write SQL AND run wrangler.")
     args = ap.parse_args()
 
-    # Body fills in subsequent tasks.
-    print(f"args: dry_run={args.dry_run} apply={args.apply} "
-          f"set={args.set!r} limit={args.limit}")
+    try:
+        yuyutei_for = load_mapping()
+    except FileNotFoundError as exc:
+        print(exc)
+        sys.exit(1)
+
+    sets = [args.set] if args.set else list(yuyutei_for.keys())
+    if args.limit:
+        sets = sets[: args.limit]
+    print(f"Yuyutei catalog ingest — {len(sets)} TCGdex JA sets")
+
+    fx = get_jpy_to_usd_rate()
+    print(f"FX rate: 1 JPY = {fx:.6f} USD\n")
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    ROLLBACK_DIR.mkdir(parents=True, exist_ok=True)
+
+    all_inserts: list[tuple[str, str]] = []  # (setcode, sql_line) for batched-file writing
+    inserted_card_ids: list[str] = []         # full card_id list for rollback
+    sets_skipped = 0
+    sets_seen = 0
+    warn_no_name = 0
+
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20.0, follow_redirects=True) as client:
+        for tcgdex_id in sets:
+            yuyutei_code = yuyutei_for.get(tcgdex_id)
+            if not yuyutei_code:
+                continue
+            time.sleep(REQ_INTERVAL_S)
+            cards = scrape_set_listing(client, yuyutei_code)
+            if cards is None:
+                sets_skipped += 1
+                print(f"  [{tcgdex_id} -> {yuyutei_code}] not on Yuyutei, skipping")
+                continue
+            sets_seen += 1
+
+            existing = fetch_existing_lids_for_set(tcgdex_id)
+            new_count = 0
+            set_warn_no_name = 0
+
+            for card in cards:
+                if not card["name_ja"]:
+                    set_warn_no_name += 1
+                    continue
+                candidates = build_card_id_candidates(tcgdex_id, card["card_number"])
+                # If ANY candidate's local_id is already in D1, skip — the
+                # UPDATE consumer will handle that row.
+                candidate_lids = {cid.split("-", 1)[1] for cid in candidates}
+                if candidate_lids & existing:
+                    continue
+                # Canonical local_id for INSERT: unpadded (matches MP/SVP
+                # catch-up convention). Canonical card_id: TCGdex set_id
+                # uppercased + unpadded local_id.
+                local_id = card["card_number"].lstrip("0") or card["card_number"]
+                card_id = f"{tcgdex_id.upper()}-{local_id}"
+                set_id = tcgdex_id.upper()
+                image_url = card["image_url"]
+                if card["price_jpy"] is not None:
+                    price_usd = round(card["price_jpy"] * fx, 2)
+                    pricing_obj = {
+                        "price_jpy": card["price_jpy"],
+                        "price_usd": price_usd,
+                        "url": f"https://{IMAGE_HOST.replace('card.', '')}/sell/poc/s/{yuyutei_code}",
+                        "marketplace": "yuyutei",
+                        "updated_at": int(time.time()),
+                    }
+                    # Wrap the inner JSON in a SQL-quoted JSON-encoded
+                    # string. The schema's pricing_json column is TEXT;
+                    # we store the {"yuyutei": {...}} object as a JSON
+                    # string, same as the UPDATE consumer's json_patch
+                    # output.
+                    pricing_json = json.dumps({"yuyutei": pricing_obj})
+                    price_source = "yuyutei"
+                else:
+                    pricing_json = None
+                    price_source = None
+
+                sql = insert_sql(
+                    card_id=card_id,
+                    set_id=set_id,
+                    local_id=local_id,
+                    name_ja=card["name_ja"],
+                    image_url=image_url,
+                    pricing_json=pricing_json,
+                    price_source=price_source,
+                )
+                all_inserts.append((yuyutei_code, sql))
+                inserted_card_ids.append(card_id)
+                new_count += 1
+
+            warn_no_name += set_warn_no_name
+            print(f"  [{tcgdex_id} -> {yuyutei_code}] "
+                  f"parsed={len(cards)} existing={len(existing)} "
+                  f"new={new_count} skipped_no_name={set_warn_no_name}")
+
+    print(f"\nSets: {sets_seen} parsed, {sets_skipped} skipped (not on Yuyutei)")
+    print(f"Products with no h4 name (skipped): {warn_no_name}")
+    print(f"INSERT statements to write: {len(all_inserts)}")
+    if not all_inserts:
+        print("Nothing to write.")
+        return
+
+    files = _write_batches(all_inserts)
+    print(f"Wrote {len(files)} batch file(s) to {OUT_DIR}/")
+
+    # Rollback file (written before any wrangler call so it's available
+    # even if --apply crashes mid-way).
+    ts = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    rollback_path = ROLLBACK_DIR / f"yuyutei_catalog_inserted_{ts}.txt"
+    rollback_path.write_text("\n".join(inserted_card_ids) + "\n", encoding="utf-8")
+    print(f"Rollback file: {rollback_path} ({len(inserted_card_ids)} card_ids)")
+
+    if args.dry_run:
+        print("\n--dry-run: skipping D1 execution")
+        return
+
+    print(f"\nApplying {len(files)} batch(es) against remote D1...")
+    for i, f in enumerate(files, 1):
+        print(f"   [{i}/{len(files)}] executing {f.name}...")
+        result = run_wrangler(WRANGLER_BIN + [f"--file={f}", "--remote"])
+        if result.returncode != 0:
+            print(f"   FAIL after {WRANGLER_MAX_ATTEMPTS} attempts: "
+                  f"{(result.stderr or '')[:400]}")
+            print(f"   Rollback list available at {rollback_path}")
+            sys.exit(1)
+    print("Done.")
+
+
+def _write_batches(inserts: list[tuple[str, str]]) -> list[Path]:
+    """Group INSERT statements by Yuyutei setcode, then split each
+    group into BATCH_SIZE-row files. File naming:
+    yuyutei_catalog_<setcode>_<NNN>.sql in OUT_DIR.
+    """
+    by_set: dict[str, list[str]] = {}
+    for setcode, sql in inserts:
+        by_set.setdefault(setcode, []).append(sql)
+    files: list[Path] = []
+    for setcode, sqls in by_set.items():
+        for i in range(0, len(sqls), BATCH_SIZE):
+            chunk = sqls[i:i + BATCH_SIZE]
+            idx = (i // BATCH_SIZE) + 1
+            path = OUT_DIR / f"yuyutei_catalog_{setcode}_{idx:03d}.sql"
+            path.write_text("\n".join(chunk) + "\n", encoding="utf-8")
+            files.append(path)
+    return files
 
 
 if __name__ == "__main__":
