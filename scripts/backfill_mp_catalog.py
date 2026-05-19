@@ -1,23 +1,22 @@
 """
-Catch up the M-P (MEGA Evolution era) Japanese promo set in
-ptcg_cards. Bulbapedia's master page "M-P Promotional cards (TCG)" is
-the canonical enumeration source — currently lists 100 setlist entries
-distributed via Pokémon Card Gym Promo Card Packs across 2025–2026.
-Our D1 typically lags because the MEGA era is still rolling out and
-TCGdex doesn't always have the latest entries by Monday's refresh.
+Catch up a Japanese promo set (*-P) in ptcg_cards by inserting placeholder
+rows for any LID present on the Bulbapedia master setlist page but missing
+from D1. Originally M-P only (MEGA Evolution era); parameterized 2026-05-19
+for SV-P (and any future *-P era set) so the same INSERT path covers all
+promo-set catch-ups without code duplication.
 
-This script INSERTs placeholder rows for any (set_id=MP, local_id=N)
+This script INSERTs placeholder rows for any (set_id=<SET>, local_id=N)
 that exists on Bulbapedia but not in D1. Placeholders carry:
 
-  card_id = "MP-{N}"     (matches existing convention, unpadded)
+  card_id = "<SET>-{N}"  (matches existing convention, unpadded)
   lang    = "ja"
-  set_id  = "MP"
+  set_id  = "<SET>"
   local_id = str(N)
   name    = <English name from Bulbapedia>   (placeholder, see note)
   name_en = <English name from Bulbapedia>
 
 NULL for everything else — TCGdex's eventual import is UPSERT-shaped
-(ON CONFLICT(card_id,lang) DO UPDATE SET ...) so when MEGA cards land
+(ON CONFLICT(card_id,lang) DO UPDATE SET ...) so when cards land
 upstream the placeholder gets overwritten with the proper JA name +
 types_csv + hp + image_high. INSERT OR IGNORE here makes that future
 overwrite a no-op for our placeholders that have already been
@@ -30,18 +29,24 @@ API calls). Placeholder-with-EN is the pragmatic floor — better than
 "Unknown" because OPBindr's search still hits, and TCGdex's UPSERT
 corrects it within a refresh cycle.
 
-The MEP false-positive guard: Bulbapedia's broader Category:M-P
-Promotional cards is contaminated with `(MEP Promo NNN)` rows (a
-different promo set) and main-set canonical-page reprints — only 5 of
-57 category members are real M-P pages. We sidestep the contamination
-entirely by using the master setlist page, which is set-clean by
-construction (every {{Setlist/entry|NNN/M-P|...}} is an M-P row).
+The category contamination guard: Bulbapedia's broader Category:<SET>
+Promotional cards is contaminated with main-set canonical-page reprints
+and cross-set false positives (e.g. M-P category has 57 members but
+only 5 are real M-P pages). We sidestep contamination entirely by
+using the master setlist page, which is set-clean by construction
+(every {{Setlist/entry|NNN/<SET-token>|...}} is a row of that set).
 
-Output: scripts/insert_promo_rows/mp_catchup_<NNN>.sql
+Bulbapedia token convention: M-P, SV-P, SM-P, etc. We derive the
+Bulbapedia token from the D1 set_id by inserting a hyphen before the
+trailing P: MP → M-P, SVP → SV-P, SMP → SM-P. Override via
+--bulba-token if a future set breaks this convention.
+
+Output: scripts/insert_promo_rows/<set>_catchup_<NNN>.sql
 
 Usage:
-    python -m scripts.backfill_mp_catalog --dry-run
-    python -m scripts.backfill_mp_catalog --apply
+    python -m scripts.backfill_mp_catalog --set MP --dry-run
+    python -m scripts.backfill_mp_catalog --set MP --apply
+    python -m scripts.backfill_mp_catalog --set SVP --apply
 """
 
 from __future__ import annotations
@@ -66,28 +71,65 @@ WRANGLER = ["node", "./node_modules/wrangler/bin/wrangler.js", "d1", "execute", 
 BULBAPEDIA_API = "https://bulbapedia.bulbagarden.net/w/api.php"
 USER_AGENT = "OPBindr-Bot/1.0 (contact: arjun@neuroplexlabs.com)"
 RATE_LIMIT_SECONDS = 1.1
-MASTER_PAGE = "M-P Promotional cards (TCG)"
-TARGET_SET_ID = "MP"
 TARGET_LANG = "ja"
 
-# Setlist row leader. We require /M-P| immediately after the LID so a
-# stray {{Setlist/entry|...|other-set|...}} entry (Bulbapedia sometimes
-# embeds cross-references) can't pollute the M-P enumeration. The
-# trailing | guarantees we stop on the M-P token boundary and don't
-# accidentally match a longer token like M-PROMO.
-_SETLIST_RE = re.compile(r"^\{\{Setlist/(?:entry|nmentry)\|(\d+)/M-P\|")
+# Wrangler transient-failure retry — same shape as the helper in
+# enrich_ja_promo_campaigns.py. Cloudflare 5xx / network blips / edge
+# timeouts cause sporadic non-zero exits; the read (SELECT) and write
+# (INSERT batches) are both idempotent so blanket retry with backoff
+# is safer than classifying transient vs hard failures by stderr.
+WRANGLER_MAX_ATTEMPTS = 3
+WRANGLER_RETRY_BACKOFF_SECONDS = (5, 15)
 
-# Card name from {{TCG ID|<setname>|<cardname>|<num>...}}.
-# Group 1 captures the cardname (3rd template arg).
-_TCG_ID_RE = re.compile(r"\{\{TCG ID\|[^|]+\|([^|}]+)")
 
-# Wikilink fallback for entries shaped [[<name> (M-P Promo N)|<display>]]{{ex}}.
-# Group 1 captures the page title before " (M-P Promo".
-_WIKILINK_NAME_RE = re.compile(r"\[\[([^|\]]+?)\s*\(M-P\s+Promo")
+def _run_wrangler(cmd: list[str]) -> subprocess.CompletedProcess:
+    """Run a wrangler command, retrying on non-zero exit. Returns the
+    final CompletedProcess. Caller decides how to react to a final
+    non-zero returncode."""
+    last_result: subprocess.CompletedProcess | None = None
+    for attempt in range(1, WRANGLER_MAX_ATTEMPTS + 1):
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+        )
+        if result.returncode == 0:
+            if attempt > 1:
+                print(f"     ok after {attempt} attempt(s)")
+            return result
+        last_result = result
+        if attempt < WRANGLER_MAX_ATTEMPTS:
+            wait = WRANGLER_RETRY_BACKOFF_SECONDS[attempt - 1]
+            err = (result.stderr or "").strip().replace("\n", " ")[:200]
+            print(f"     attempt {attempt} failed ({err}); retrying in {wait}s...")
+            time.sleep(wait)
+    assert last_result is not None
+    return last_result
+
+
+def _default_bulba_token(set_id: str) -> str:
+    """Convert a D1 promo set_id like 'MP'/'SVP'/'SMP' to Bulbapedia's
+    hyphenated form 'M-P'/'SV-P'/'SM-P'. The convention is: insert a
+    hyphen before the trailing P. Caller can override via --bulba-token
+    if a set breaks this rule."""
+    if not set_id.endswith("P"):
+        raise ValueError(
+            f"--set {set_id!r} doesn't end in 'P'; this script is for "
+            f"*-P promo sets only. Pass --bulba-token to override."
+        )
+    if len(set_id) < 2:
+        raise ValueError(f"--set {set_id!r} too short")
+    return set_id[:-1] + "-P"
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--set", dest="set_id", default="MP",
+                    help="D1 set_id to catch up (MP, SVP, SMP, etc.). "
+                         "Default: MP for backwards compatibility.")
+    ap.add_argument("--bulba-token", default=None,
+                    help="Override the derived Bulbapedia token "
+                         "(default: MP→M-P, SVP→SV-P). Only needed if "
+                         "the set breaks the hyphen-before-P convention.")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--dry-run", action="store_true",
                    help="Fetch + parse + diff + write SQL. Don't touch D1.")
@@ -95,22 +137,35 @@ def main() -> None:
                    help="Fetch + parse + diff + write SQL AND run wrangler.")
     args = ap.parse_args()
 
-    print(f"1. Fetching Bulbapedia master page {MASTER_PAGE!r}...")
-    wt = _fetch_page_wikitext(MASTER_PAGE)
+    set_id = args.set_id.upper()
+    bulba_token = args.bulba_token or _default_bulba_token(set_id)
+    master_page = f"{bulba_token} Promotional cards (TCG)"
+    setlist_re = re.compile(
+        rf"^\{{\{{Setlist/(?:entry|nmentry)\|(\d+)/{re.escape(bulba_token)}\|"
+    )
+    wikilink_name_re = re.compile(
+        rf"\[\[([^|\]]+?)\s*\({re.escape(bulba_token)}\s+Promo"
+    )
+    slug = set_id.lower()
+
+    print(f"Set: {set_id!r}  Bulbapedia token: {bulba_token!r}  Page: {master_page!r}")
+
+    print(f"1. Fetching Bulbapedia master page {master_page!r}...")
+    wt = _fetch_page_wikitext(master_page)
     print(f"   wikitext length: {len(wt)} chars")
 
     print("2. Parsing setlist entries...")
-    parsed = _parse_setlist(wt)
-    print(f"   parsed {len(parsed)} M-P entries "
+    parsed = _parse_setlist(wt, setlist_re, wikilink_name_re)
+    print(f"   parsed {len(parsed)} {bulba_token} entries "
           f"(LID range {min(p[0] for p in parsed) if parsed else '-'}.."
           f"{max(p[0] for p in parsed) if parsed else '-'})")
     if not parsed:
         print("Nothing parsed — abort.")
         sys.exit(1)
 
-    print("3. Querying D1 for existing MP/ja LIDs...")
-    existing = _fetch_existing_mp_lids()
-    print(f"   D1 has {len(existing)} MP/ja rows already")
+    print(f"3. Querying D1 for existing {set_id}/{TARGET_LANG} LIDs...")
+    existing = _fetch_existing_lids(set_id)
+    print(f"   D1 has {len(existing)} {set_id}/{TARGET_LANG} rows already")
 
     missing = [(lid, name) for lid, name in parsed if lid not in existing]
     print(f"   {len(missing)} new row(s) to INSERT")
@@ -120,7 +175,7 @@ def main() -> None:
 
     print("4. Writing INSERT OR IGNORE batches...")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    files = _write_batches(missing)
+    files = _write_batches(missing, set_id, slug)
     print(f"   wrote {len(files)} batch file(s) to {OUT_DIR}/")
 
     if args.dry_run:
@@ -131,12 +186,10 @@ def main() -> None:
     print("5. Applying batches against remote D1...")
     for i, f in enumerate(files, 1):
         print(f"   [{i}/{len(files)}] executing {f.name}...")
-        result = subprocess.run(
-            WRANGLER + [f"--file={f}", "--remote"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
+        result = _run_wrangler(WRANGLER + [f"--file={f}", "--remote"])
         if result.returncode != 0:
-            print(f"   FAIL: {(result.stderr or '')[:400]}")
+            print(f"   FAIL after {WRANGLER_MAX_ATTEMPTS} attempts: "
+                  f"{(result.stderr or '')[:400]}")
             sys.exit(1)
     print("Done.")
 
@@ -151,23 +204,27 @@ def _fetch_page_wikitext(page: str) -> str:
     return data.get("parse", {}).get("wikitext", {}).get("*", "")
 
 
-def _parse_setlist(wikitext: str) -> list[tuple[int, str]]:
+def _parse_setlist(
+    wikitext: str,
+    setlist_re: re.Pattern,
+    wikilink_name_re: re.Pattern,
+) -> list[tuple[int, str]]:
     """Pull (local_id, English card name) pairs out of every
-    {{Setlist/entry|NNN/M-P|...}} line. Skip lines that don't carry
-    a recognizable card name template.
+    {{Setlist/entry|NNN/<SET-token>|...}} line. Skip lines that don't
+    carry a recognizable card name template.
     """
     out: list[tuple[int, str]] = []
     skipped_no_name = 0
     for raw_line in wikitext.split("\n"):
         line = raw_line.strip()
-        m = _SETLIST_RE.match(line)
+        m = setlist_re.match(line)
         if not m:
             continue
         try:
             lid = int(m.group(1))
         except ValueError:
             continue
-        name = _extract_name(line)
+        name = _extract_name(line, wikilink_name_re)
         if not name:
             skipped_no_name += 1
             continue
@@ -178,31 +235,35 @@ def _parse_setlist(wikitext: str) -> list[tuple[int, str]]:
     return out
 
 
-def _extract_name(setlist_line: str) -> str:
+# Card name from {{TCG ID|<setname>|<cardname>|<num>...}}.
+# Group 1 captures the cardname (3rd template arg). This pattern is
+# set-agnostic, so we pull it out as a module-level constant.
+_TCG_ID_RE = re.compile(r"\{\{TCG ID\|[^|]+\|([^|}]+)")
+
+
+def _extract_name(setlist_line: str, wikilink_name_re: re.Pattern) -> str:
     m = _TCG_ID_RE.search(setlist_line)
     if m:
         return m.group(1).strip()
-    m = _WIKILINK_NAME_RE.search(setlist_line)
+    m = wikilink_name_re.search(setlist_line)
     if m:
         return m.group(1).strip()
     return ""
 
 
-def _fetch_existing_mp_lids() -> set[int]:
-    """Return the set of LIDs (as ints) we already have for MP/ja."""
+def _fetch_existing_lids(set_id: str) -> set[int]:
+    """Return the set of LIDs (as ints) we already have for <set_id>/<lang>."""
     cmd = WRANGLER + [
         "--remote",
         "--json",
         "--command",
         f"SELECT CAST(local_id AS INTEGER) AS lid FROM ptcg_cards "
-        f"WHERE UPPER(set_id) = '{TARGET_SET_ID}' AND lang = '{TARGET_LANG}'",
+        f"WHERE UPPER(set_id) = '{set_id}' AND lang = '{TARGET_LANG}'",
     ]
-    result = subprocess.run(
-        cmd, capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
+    result = _run_wrangler(cmd)
     if result.returncode != 0:
-        print(f"   FAIL fetching existing LIDs: "
+        print(f"   FAIL fetching existing LIDs after "
+              f"{WRANGLER_MAX_ATTEMPTS} attempts: "
               f"{(result.stderr or '')[:400]}")
         sys.exit(1)
     payload = _strip_wrangler_chrome(result.stdout)
@@ -225,18 +286,22 @@ def _strip_wrangler_chrome(stdout: str) -> str:
     return stdout
 
 
-def _write_batches(rows: list[tuple[int, str]]) -> list[Path]:
+def _write_batches(
+    rows: list[tuple[int, str]],
+    set_id: str,
+    slug: str,
+) -> list[Path]:
     files: list[Path] = []
     cols = ("card_id", "lang", "set_id", "local_id", "name", "name_en")
     values: list[str] = []
     for lid, name in rows:
-        card_id = f"{TARGET_SET_ID}-{lid}"
+        card_id = f"{set_id}-{lid}"
         local_id_s = str(lid)
         values.append(
             "(" + ", ".join([
                 _esc(card_id),
                 _esc(TARGET_LANG),
-                _esc(TARGET_SET_ID),
+                _esc(set_id),
                 _esc(local_id_s),
                 _esc(name),
                 _esc(name),
@@ -245,7 +310,7 @@ def _write_batches(rows: list[tuple[int, str]]) -> list[Path]:
     for i in range(0, len(values), BATCH_SIZE):
         chunk = values[i:i + BATCH_SIZE]
         idx = (i // BATCH_SIZE) + 1
-        path = OUT_DIR / f"mp_catchup_{idx:03d}.sql"
+        path = OUT_DIR / f"{slug}_catchup_{idx:03d}.sql"
         path.write_text(
             f"INSERT OR IGNORE INTO ptcg_cards "
             f"({', '.join(cols)}) VALUES\n"

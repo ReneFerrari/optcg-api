@@ -186,7 +186,22 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: python -m scripts.backfill_mp_catalog --apply
+        run: python -m scripts.backfill_mp_catalog --set MP --apply
+
+      # SV-P catch-up mirrors the M-P step using the same generalized
+      # script (parameterized 2026-05-19). TCGdex frequently lags on
+      # newer SV-P promos (Pokémon Center Special Boxes, Endorsed
+      # Independent Event Packs, etc.) so this step keeps the catalog
+      # current ahead of upstream by INSERT OR IGNORE'ing placeholder
+      # rows from the Bulbapedia master setlist. UPSERT-shaped TCGdex
+      # import overwrites the EN placeholder name/types/hp once it
+      # picks the card up.
+      - name: Catch up SV-P promo set rows (Bulbapedia master setlist)
+        continue-on-error: true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: python -m scripts.backfill_mp_catalog --set SVP --apply
 
       # Promo campaign tagging — re-applies CAMPAIGN_SIGNALS each week
       # so newly-imported promo rows that fall into a known campaign
