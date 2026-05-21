@@ -415,11 +415,19 @@ def _to_en_name(card: dict, client: EbayClient | None = None) -> str | None:
     d1_name_en = (card.get("name_en") or "").strip()
     if d1_name_en:
         return d1_name_en
+    # Priority 0.5: if `name` itself is already pure ASCII, it's already
+    # English. Common for energy cards (BWP-89 "Darkness Energy" has the
+    # English name stored in `name` directly when TCGdex / our ingest
+    # never localized them to JA). Added 2026-05-21 to recover ~50
+    # energy-card rows where name_en is null but `name` is "Fighting
+    # Energy" / "Basic Water Energy" etc.
+    jp_name = (card.get("name") or "").strip()
+    if jp_name and jp_name.isascii():
+        return jp_name
     jp_en, cid_en = _load_jp_en_maps()
     cid = card.get("card_id") or ""
     if cid in cid_en and cid_en[cid]:
         return cid_en[cid]
-    jp_name = (card.get("name") or "").strip()
     base = re.split(r"[(（\s]", jp_name)[0]
     if base in jp_en:
         return jp_en[base]
