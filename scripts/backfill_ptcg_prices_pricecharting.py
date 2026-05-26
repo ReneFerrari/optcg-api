@@ -503,7 +503,25 @@ def match_set(set_cards: list[dict], pc_cards: list[dict], set_id: str,
         if candidates:
             best = candidates[0]
             matched_by = "by_number"
-        else:
+            # Name guard. JA sets renumber independently of PC's numbering
+            # (PC's trailing number is the JA-native set position, often
+            # Pokédex-keyed), so a number-only match can silently land on
+            # a different physical card — e.g. our PMCG5-039 Magnemite
+            # against PC's slot 39 Sabrina's Gengar. Drop the match when
+            # our name_en disagrees with the PC entry's name; let the
+            # by_name strategy below (or no-match) handle it.
+            # See audit_pc_vintage_name_similarity.py +
+            # [[feedback-pricecharting-variant-conflation]].
+            our_name_slug = _pokemon_slug(c.get("name_en") or "")
+            pc_name_slug = _pokemon_slug(best.get("name") or "")
+            if our_name_slug and pc_name_slug and not _name_slugs_compatible(our_name_slug, pc_name_slug):
+                if verbose:
+                    print(f"      name-guard: drop {c['card_id']} "
+                          f"({c.get('name_en')!r}) ≠ PC {best['name']!r}")
+                best = None
+                matched_by = None
+                candidates = []
+        if matched_by is None and not candidates:
             # Strategy 2: name fallback. Only fires when name_en is set on
             # the D1 row (true for ~75% of neo1-3 and e-Card 2/3/5 rows).
             name_key = _norm_name(c.get("name_en") or "")
@@ -548,6 +566,43 @@ def _norm_name(s: str) -> str:
     s = _NAME_BRACKETS.sub(" ", s).lower()
     s = _NAME_PUNCT.sub("", s)
     return s
+
+
+# Hyphen-preserving slug used by the by-number name guard. Unlike
+# _norm_name (which collapses to a single alnum token), this one keeps
+# word boundaries as `-` so the compatibility check can require token
+# alignment — preventing 'marill' from spuriously matching 'azumarill'.
+_GENDER_RE = re.compile(r"[♂♀★☆]")
+_SLUG_PUNCT = re.compile(r"[^a-z0-9]+")
+_SLUG_DASH = re.compile(r"-+")
+
+
+def _pokemon_slug(name: str) -> str:
+    if not name:
+        return ""
+    s = _GENDER_RE.sub("", name.lower())
+    s = s.replace("'", "").replace("’", "")
+    s = _SLUG_PUNCT.sub("-", s)
+    s = _SLUG_DASH.sub("-", s).strip("-")
+    return s
+
+
+def _name_slugs_compatible(ours: str, theirs: str) -> bool:
+    """True when two pokemon slugs refer to the same card (lenient match).
+
+    Exact match, or one is a hyphen-bounded prefix/suffix of the other.
+    Token alignment avoids the 'marill' ⊂ 'azumarill' false positive that
+    a raw substring check would allow.
+    """
+    if not ours or not theirs:
+        return True  # missing data → don't gate
+    if ours == theirs:
+        return True
+    if theirs.startswith(ours + "-") or theirs.endswith("-" + ours):
+        return True
+    if ours.startswith(theirs + "-") or ours.endswith("-" + theirs):
+        return True
+    return False
 
 
 def query_d1(sql: str) -> list[dict]:
