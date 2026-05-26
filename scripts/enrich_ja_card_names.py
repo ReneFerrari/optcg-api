@@ -60,6 +60,178 @@ MANUAL_OVERRIDES: dict[str, str] = {
 }
 
 
+# Energy and trainer cards whose JA name has no Pokémon species (so tier 1
+# can't resolve) and no per-card_id EN counterpart in D1 (JA and EN sets
+# carry different set_ids for these). Without this vocab, eBay JA search
+# can't query them by EN name — see backfill_ptcg_prices_ebay's
+# `_to_en_name` priority chain.
+#
+# Entries are restricted to canonical Pokémon TCG English names with
+# high-confidence community agreement. Per [[feedback-no-plausible-wrong-prices]]
+# wrong EN names produce wrong eBay matches, so we skip ambiguous cards
+# (Holon series, Unit Energy variants, generic Special-prefix energies)
+# rather than guess.
+JA_NAME_VOCAB: dict[str, str] = {
+    # Basic energies — universal canon across every era
+    "基本水エネルギー": "Basic Water Energy",
+    "基本炎エネルギー": "Basic Fire Energy",
+    "基本草エネルギー": "Basic Grass Energy",
+    "基本悪エネルギー": "Basic Darkness Energy",
+    "基本超エネルギー": "Basic Psychic Energy",
+    "基本闘エネルギー": "Basic Fighting Energy",
+    "基本雷エネルギー": "Basic Lightning Energy",
+    "基本鋼エネルギー": "Basic Metal Energy",
+    "基本フェアリーエネルギー": "Basic Fairy Energy",
+    # Special energies — established canonical names
+    "ダブル無色エネルギー": "Double Colorless Energy",
+    "レインボーエネルギー": "Rainbow Energy",
+    "ダブルターボエネルギー": "Double Turbo Energy",
+    "ツインエネルギー": "Twin Energy",
+    "プリズムエネルギー": "Prism Energy",
+    "ジェットエネルギー": "Jet Energy",
+    "オーロラエネルギー": "Aurora Energy",
+    "フュージョンエネルギー": "Fusion Strike Energy",
+    "ビーストエネルギー": "Beast Energy",
+    "リバーサルエネルギー": "Reversal Energy",
+    "ルミナスエネルギー": "Luminous Energy",
+    "いちげきエネルギー": "Single Strike Energy",
+    "れんげきエネルギー": "Rapid Strike Energy",
+    "ダブルドラゴンエネルギー": "Double Dragon Energy",
+    "マルチエネルギー": "Multi Energy",
+    "プラズマエネルギー": "Plasma Energy",
+    "スピード雷エネルギー": "Speed Lightning Energy",
+    "ヒート炎エネルギー": "Heat Fire Energy",
+    "ウォッシュ水エネルギー": "Wash Water Energy",
+    "ストロングエネルギー": "Strong Energy",
+    "バーニングエネルギー": "Burning Energy",
+    "メモリーエネルギー": "Memory Energy",
+    "ヒーリングエネルギー": "Healing Energy",
+    "ウィークガードエネルギー": "Weakness Guard Energy",
+    "Vガードエネルギー": "V Guard Energy",
+    "スクランブルエネルギー": "Scramble Energy",
+    "ワープエネルギー": "Warp Energy",
+    "パワフル無色エネルギー": "Powerful Colorless Energy",
+    # SWSH/SV-era "Type-Modifier" energies (Bulbapedia article titles use
+    # single-letter codes — "Stone F Energy" — but printed card names use
+    # the full type word, which is what eBay listings use.)
+    "ハイド悪エネルギー": "Hiding Darkness Energy",
+    "ホラー超エネルギー": "Horror Psychic Energy",
+    "ニトロ炎エネルギー": "Nitro Fire Energy",
+    "ストーン闘エネルギー": "Stone Fighting Energy",
+    "マグネット鋼エネルギー": "Magnetic Metal Energy",
+    "バブル水エネルギー": "Bubble Water Energy",
+    "グロウ草エネルギー": "Grow Grass Energy",
+    "アロマ草エネルギー": "Aromatic Grass Energy",
+    "テレパス超エネルギー": "Telepathic Psychic Energy",
+    # Special energies — vintage to modern, canonical EN names
+    "SPエネルギー": "SP Energy",
+    "サイクロンエネルギー": "Cyclone Energy",
+    "クリスタルエネルギー": "Crystal Energy",
+    "カウンターエネルギー": "Counter Energy",
+    "キャプチャーエネルギー": "Capture Energy",
+    "リアクトエネルギー": "React Energy",
+    "レスキューエネルギー": "Rescue Energy",
+    "インパクトエネルギー": "Impact Energy",
+    "リゲインエネルギー": "Regain Energy",
+    "ギフトエネルギー": "Gift Energy",
+    "シールドエネルギー": "Shield Energy",
+    "ミステリーエネルギー": "Mystery Energy",
+    "ミストエネルギー": "Mist Energy",
+    "レガシーエネルギー": "Legacy Energy",
+    "ブーメランエネルギー": "Boomerang Energy",
+    "フラッシュエネルギー": "Flash Energy",
+    "フルヒールエネルギー": "Full Heal Energy",
+    "ポーションエネルギー": "Potion Energy",
+    "ドローエネルギー": "Draw Energy",
+    "トリプル加速エネルギー": "Triple Acceleration Energy",
+    "トレジャーエネルギー": "Treasure Energy",
+    "デルタレインボーエネルギー": "Delta Rainbow Energy",
+    "ダークメタルエネルギー": "Dark Metal Energy",
+    "ハーブエネルギー": "Herbal Energy",
+    "イグニッションエネルギー": "Ignition Energy",
+    "リサイクルエネルギー": "Recycle Energy",
+    "闇のエネルギー": "Darkness Energy",
+    # CAUTION: these two trap on literal-romanji translation. Printed
+    # English names are NOT "Rich" / "Therapy".
+    "リッチエネルギー": "Enriching Energy",
+    "セラピーエネルギー": "Therapeutic Energy",
+    # Pre-Diamond/Pearl rule-text quirk: 特殊悪/特殊鋼 ("special X") was
+    # the JP descriptor for the special-energy variant of Darkness/Metal.
+    # The printed English card just reads "Darkness Energy" / "Metal Energy".
+    "特殊悪エネルギー": "Darkness Energy",
+    "特殊鋼エネルギー": "Metal Energy",
+    # Letter-code energies — eBay listings use the letter suffix.
+    "ブレンドエネルギー 草炎超悪": "Blend Energy GFPD",
+    "ブレンドエネルギー 水雷闘鋼": "Blend Energy WLFM",
+    "ユニットエネルギー草炎水": "Unit Energy GRW",
+    "ユニットエネルギー闘悪フェアリー": "Unit Energy FDY",
+    "ユニットエネルギー雷超鋼": "Unit Energy LPM",
+    "ホロンエネルギーGL": "Holon Energy GL",
+    "ホロンエネルギーff": "Holon Energy FF",
+    "ホロンエネルギーwp": "Holon Energy WP",
+    # Second-pass tail additions (researched 2026-05-26).
+    "エネルギーアーク": "Energy Ark",
+    "コーティング鋼エネルギー": "Coating Metal Energy",
+    "スパイクエネルギー": "Spiky Energy",
+    "スプラッシュエネルギー": "Splash Energy",
+    "ロケット団エネルギー": "Team Rocket's Energy",
+    "ワンダーエネルギー": "Wonder Energy",
+    "超ブーストエネルギー": "Super Boost Energy",
+    "金属エネルギー": "Metal Energy",
+    "アクアエネルギー": "Aqua Energy",
+    "アッパーエネルギー": "Upper Energy",
+    "エネルギーコイン": "Energy Coin",
+    "エネルギーシール": "Energy Sticker",
+    "エネルギースピナー": "Energy Spinner",
+    "エネルギーポーチ": "Energy Pouch",
+    "エネルギー転送PRO": "Energy Search Pro",
+    "エネルギー交換装置": "Energy Exchanger",
+    "エネルギーリセット": "Energy Reset",
+    # Energy-related Trainer cards
+    "エネルギーつけかえ": "Energy Switch",
+    "エネルギー回収": "Energy Retrieval",
+    "スーパーエネルギー回収": "Super Energy Retrieval",
+    "エネルギーリサイクル": "Energy Recycler",
+    "エネルギー電荷": "Energy Charge",
+    "エネルギーリムーブ": "Energy Removal",
+    "エネルギー除去": "Energy Removal",
+    "エネルギー除去2": "Energy Removal 2",
+    "スーパーエネルギー除去2": "Super Energy Removal 2",
+    # GOTCHA: literal romaji disagrees with printed EN name.
+    # エネルギー転送 (lit. "Energy Transfer") is the JP card whose
+    # English print is "Energy Search". Keep below the by-name fallback
+    # mappings so the eBay query doesn't search the wrong string.
+    "エネルギー転送": "Energy Search",
+    # Deliberately NOT mapped: エネルギーの流れ, エネルギーを高めます,
+    # エネルギー回復, エネルギー検索, エネルギースイッチ, エネルギー根 —
+    # all confirmed by 2026-05-26 research to NOT be card names (flavor
+    # text fragments, attack-text snippets, or literal-translation
+    # mislabelings in the source data). エネルギー循環装置 also held
+    # (no Bulbapedia exact match; could be Energy Switch / Charge /
+    # Pickup depending on era). Per [[feedback-no-plausible-wrong-prices]],
+    # holding rather than guessing.
+    #
+    # ホロンエネルギー SYN at PCGP-114/115/116 are handled by per-card_id
+    # UPDATE rather than this name-keyed dict — the three rows share the
+    # same `name` but resolve to different EN cards (GL/FF/WP) based on
+    # local_id. See scripts/jp_batches/backfill_holon_syn_promos.sql.
+}
+
+
+# Card_id → EN name for cases where multiple physical cards share the
+# same JA `name` field (so the name-keyed dict above can't disambiguate).
+# Currently the PCGP Holon Energy promos: D1 has all three under the
+# literal name "ホロンエネルギー SYN" (the "SYN" prefix on Holon energy
+# JP names didn't get split out into a suffix during import), but the
+# three card_ids resolve to GL/FF/WP variants per Bulbapedia's PCG-P
+# Promotional cards listing.
+JA_NAME_OVERRIDES_BY_ID: dict[str, str] = {
+    "PCGP-114": "Holon Energy GL",
+    "PCGP-115": "Holon Energy FF",
+    "PCGP-116": "Holon Energy WP",
+}
+
+
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser()
@@ -112,6 +284,7 @@ def main() -> None:
     print("3. Resolving EN names...")
     new_count = 0
     species_hits = 0
+    vocab_hits = 0
     tcgdex_hits = 0
     network_calls = 0
     headers = {"User-Agent": "OPBindr/1.0"}
@@ -128,6 +301,11 @@ def main() -> None:
             new_count += 1
             continue
 
+        if cid in JA_NAME_OVERRIDES_BY_ID:
+            cache[cid] = JA_NAME_OVERRIDES_BY_ID[cid]
+            new_count += 1
+            continue
+
         en_name = ""
         called_network = False
 
@@ -136,6 +314,15 @@ def main() -> None:
             en_name = _resolve_species(ja_name, ja_pairs, en_by_dex)
             if en_name:
                 species_hits += 1
+
+        # Tier 1.5: JA name vocab for energies and energy-related trainers.
+        # Pokemon-species lookup doesn't match these because they carry
+        # no Pokemon name, and the TCGdex EN fallback also misses (the
+        # cross-language card_id rarely aligns for energies). The vocab
+        # dict is the only path.
+        if not en_name and ja_name in JA_NAME_VOCAB:
+            en_name = JA_NAME_VOCAB[ja_name]
+            vocab_hits += 1
 
         # Tier 2: TCGdex EN fallback for trainers/energies (no species
         # in the JA name). Verify dexId compatibility before accepting.
@@ -152,8 +339,8 @@ def main() -> None:
 
         if i % 200 == 0:
             print(f"   [{i}/{len(rows)}] resolved {new_count} "
-                  f"(species: {species_hits}, tcgdex: {tcgdex_hits}, "
-                  f"network calls: {network_calls})")
+                  f"(species: {species_hits}, vocab: {vocab_hits}, "
+                  f"tcgdex: {tcgdex_hits}, network calls: {network_calls})")
             OUT.write_text(json.dumps(cache, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # Rate-limit only the network path (tier 2). Tier 1 is local
