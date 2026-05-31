@@ -9,7 +9,13 @@ const IMG_HEADERS = {
 // timeout the user sees a 30s spinner on every uncached card image. We
 // abort the direct fetch after 5s and fall through to wsrv.nl, which can
 // reach Bandai on our behalf and serves the response from its own CDN.
-const UPSTREAM_TIMEOUT_MS = 5000;
+// Lowered 5000 -> 2000 on 2026-05-31: when Bandai is actively hot-link-
+// blocking the Worker IP, a 5s wait per uncached image stacks to a ~8s
+// load (5s dead wait + ~3s wsrv). 2s fails fast to the wsrv fallback so
+// blocked-period loads are ~3-4s instead of ~8s. Still ample for a
+// healthy Bandai response. Revert toward 5s once the block clears if it
+// causes premature wsrv fallback on slow-but-valid responses.
+const UPSTREAM_TIMEOUT_MS = 2000;
 const WSRV_TIMEOUT_MS = 10000;
 
 async function fetchWithTimeout(url, init = {}, timeoutMs = UPSTREAM_TIMEOUT_MS) {
