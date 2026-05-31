@@ -1,0 +1,36 @@
+// AUTO-GENERATED 2026-05-31 (scratch analysis). Card_ids whose pricecharting
+// slug names a DIFFERENT card than ours (name/set-token verified mismatch,
+// e.g. XYP-151 Gyarados Poncho -> shining-mew-corocoro-151). withSlimPricing
+// skips pricecharting for these so a wrong-card price never displays. Regen
+// after any pricecharting re-scrape; supersede with a D1 cleanup when possible.
+export const PRICECHARTING_CONFLATIONS = new Set([
+  'ADV2-11', 'ADV2-16', 'ADV2-17', 'ADV2-22', 'ADV2-24', 'ADV2-26',
+  'ADV2-3', 'ADV2-32', 'ADV2-33', 'ADV2-40', 'ADV2-44', 'ADV2-46',
+  'BW4-70', 'BW4-74', 'BW4-75', 'BW4-76', 'BW7-71', 'BW7-75',
+  'BW7-76', 'BW7-77', 'BW7-78', 'BW9-78', 'BW9-80', 'BW9-83',
+  'BW9-84', 'BW9-85', 'BW9-86', 'BWP-129', 'BWP-133', 'BWP-151',
+  'BWP-25', 'BWP-33', 'BWP-9', 'CP4-30', 'CP4-7', 'DP2-26',
+  'DP2-30', 'DP2-93', 'DP6-81', 'DP6-86', 'DP6-88', 'DPP-3',
+  'MP-25', 'MP-3', 'MP-4', 'MP-9', 'PCG10-1', 'PCG10-13',
+  'PCG10-16', 'PCG10-2', 'PCG10-4', 'PCG10-6', 'PCG10-9', 'PCGP-129',
+  'PCGP-149', 'PCGP-25', 'PCGP-4', 'PTP-1', 'PTP-14', 'PTP-20',
+  'PTP-22', 'PTP-25', 'PTP-3', 'PTP-30', 'PTP-38', 'PTP-39',
+  'PTP-4', 'PTP-41', 'PTP-9', 'SM10-110', 'SM10-7', 'SM10-99',
+  'SM10A-57', 'SM10B-56', 'SM10B-60', 'SM11-107', 'SM11-95', 'SM11-97',
+  'SM11A-68', 'SM12-100', 'SM12-102', 'SM12-65', 'SM12-99', 'SM12A-178',
+  'SM12A-182', 'SM12A-185', 'SM12A-186', 'SM1P-1', 'SM1P-13', 'SM1P-14',
+  'SM1P-20', 'SM1P-22', 'SM1P-25', 'SM1P-3', 'SM1P-30', 'SM1P-33',
+  'SM1P-37', 'SM1P-38', 'SM1P-39', 'SM1P-4', 'SM1P-41', 'SM1P-43',
+  'SM1P-55', 'SM1P-57', 'SM9-101', 'SM9-103', 'SM9-105', 'SM9-118',
+  'SMP-129', 'SMP-133', 'SMP-149', 'SMP-151', 'SMP-249', 'SMP-25',
+  'SMP-297', 'SMP-39', 'SWSH10A-63', 'SWSH8-119', 'SWSH8-128', 'SWSH8-129',
+  'SWSHP-133', 'SWSHP-249', 'SWSHP-33', 'SWSHP-4', 'XY-13', 'XY-20',
+  'XY-23', 'XY-28', 'XY-29', 'XY-32', 'XY-35', 'XY-43',
+  'XY-63', 'XY3-101', 'XY3-102', 'XY3-103', 'XY3-104', 'XY3-105',
+  'XY4-96', 'XY4-97', 'XY6-34', 'XY6-43', 'XY6-61', 'XY6-80',
+  'XY6-82', 'XY6-83', 'XY6-84', 'XY6-85', 'XY6-86', 'XY6-87',
+  'XY6-89', 'XY6-90', 'XY6-91', 'XY7-27', 'XY7-36', 'XY7-37',
+  'XY7-42', 'XY7-43', 'XY7-54', 'XY7-57', 'XY7-68', 'XY7-82',
+  'XY9-89', 'XYP-133', 'XYP-149', 'XYP-151', 'XYP-249', 'XYP-3',
+  'XYP-33', 'XYP-4', 'XYP-9',
+]);

@@ -13,6 +13,8 @@
 // the binder grid + AddCardsModal filter UI need. CardEnlargeModal
 // hits /pokemon/cards/:id for the heavy fields (effect/abilities/attacks).
 
+import { PRICECHARTING_CONFLATIONS } from '../pricechartingConflations.js';
+
 const VALID_LANGS = new Set(['en', 'ja', 'zh-cn', 'zh-tw']);
 
 function jsonResponse(obj, status = 200) {
@@ -123,13 +125,19 @@ export function withSlimPricing(slim) {
   if (typeof p.ebay?.price_usd === 'number') {
     pruned.ebay = { price_usd: p.ebay.price_usd };
   }
-  // NOTE: pricecharting is deliberately NOT carried yet. A name-vs-slug
-  // audit (2026-05-31) found 169 of 1,549 pricecharting-sourced JA rows
-  // are wrong-card conflations (e.g. ADV2-33 Sandshrew priced from a
-  // regice-gold-star slug at $430). Enabling pricecharting display before
-  // running data/backfill/pricecharting_conflation_cleanup.sql would show
-  // those wrong prices. Re-add this block (+ the pickPrice branch in
-  // normalize/ptcg.js) once the cleanup has been applied to D1.
+  // PriceCharting (eBay-sold scrape, USD market). Carried for all rows
+  // EXCEPT the name/set-token-verified wrong-card conflations in
+  // PRICECHARTING_CONFLATIONS (e.g. XYP-151 Gyarados Poncho whose slug
+  // points at shining-mew-corocoro-151). Those are withheld here so a
+  // wrong-card price never displays; they get correct prices via a
+  // future pricecharting re-scrape / D1 cleanup. The 1,378 verified rows
+  // (incl chase promos like Team Skull / Magikarp Poncho) surface
+  // normally — this is the bulk of the high-value JA promo coverage.
+  if (typeof p.pricecharting?.market === 'number' &&
+      !PRICECHARTING_CONFLATIONS.has(slim.id)) {
+    pruned.pricecharting = { market: p.pricecharting.market };
+    if (typeof p.pricecharting.url === 'string') pruned.pricecharting.url = p.pricecharting.url;
+  }
   return { ...slim, pricing: pruned };
 }
 
@@ -150,9 +158,10 @@ export function registerPokemonCardRoutes(app) {
     // distinct entry and the old one ages out naturally.
     //   v2 (2026-05-07): JA queries now JOIN to EN for name_en alias
     //   v3 (2026-05-31): withSlimPricing now carries yuyutei/hareruya/ebay/
-    //     pricecharting + all tcgplayer variant keys (was dropping ~6.3k JA
-    //     prices the frontend could render)
-    baseUrl.searchParams.set('_v', '3');
+    //     + all tcgplayer variant keys (was dropping ~6.3k JA prices)
+    //   v4 (2026-05-31): pricecharting re-enabled (1,378 verified rows incl
+    //     chase promos; 171 wrong-card conflations excluded via module)
+    baseUrl.searchParams.set('_v', '4');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {
