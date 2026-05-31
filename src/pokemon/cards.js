@@ -117,7 +117,7 @@ export function withSlimPricing(slim) {
   // JP retail chain (FX-converted USD). pickPrice gates these on
   // price_source so they never surface for non-JP cards; carrying them
   // here is safe — the frontend still honours the source gate.
-  for (const key of ['yuyutei', 'hareruya']) {
+  for (const key of ['yuyutei', 'hareruya', 'fullahead']) {
     const usd = p[key]?.price_usd;
     if (typeof usd === 'number') pruned[key] = { price_usd: usd };
   }
@@ -161,7 +161,9 @@ export function registerPokemonCardRoutes(app) {
     //     + all tcgplayer variant keys (was dropping ~6.3k JA prices)
     //   v4 (2026-05-31): pricecharting re-enabled (1,378 verified rows incl
     //     chase promos; 171 wrong-card conflations excluded via module)
-    baseUrl.searchParams.set('_v', '4');
+    //   v5 (2026-05-31): withSlimPricing now carries fullahead (226 promo
+    //     prices applied to D1) alongside yuyutei/hareruya
+    baseUrl.searchParams.set('_v', '5');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {
