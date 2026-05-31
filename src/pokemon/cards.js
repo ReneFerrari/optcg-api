@@ -64,11 +64,23 @@ export function rowToSlim(row) {
 // endpoints — the per-card detail endpoint keeps the full object so
 // CardEnlargeModal has the full TCGplayer / Cardmarket spread.
 //
-// Keys preserved (must stay in sync with normalize/ptcg.js):
+// MUST stay in sync with normalize/ptcg.js `pickPrice`. The keep-list
+// below was frozen at {holofoil|normal|reverseHolofoil} + cardmarket +
+// manual while the backfills + pickPrice grew to cover the JP retail
+// chain (yuyutei, hareruya), eBay (ebay_jp / ebay_us), PriceCharting,
+// and the vintage TCGplayer variant keys (1stEdition / unlimited). The
+// result: ~6.3k JA rows had a real price in D1 that pickPrice could read
+// but that this function silently dropped before it reached the frontend
+// (user-visible JA coverage sat at ~50% vs the ~76% the data supports).
+// Keys preserved now mirror every source pickPrice consumes:
 //   - pricing.manual.price
-//   - pricing.tcgplayer.{holofoil|normal|reverseHolofoil}.market
+//   - pricing.tcgplayer.<anyVariant>.market   (holofoil/normal/reverse/
+//     1stEdition/unlimited/… — pass through every variant carrying a
+//     numeric market so new variant keys never silently break again)
 //   - pricing.cardmarket.{avg|trend|avg7|avg30|avg1|low}
-const TCGPLAYER_VARIANT_KEYS = ['holofoil', 'normal', 'reverseHolofoil'];
+//   - pricing.yuyutei.price_usd / pricing.hareruya.price_usd
+//   - pricing.ebay.price_usd
+//   - pricing.pricecharting.market
 const CARDMARKET_KEYS = ['avg', 'trend', 'avg7', 'avg30', 'avg1', 'low'];
 export function withSlimPricing(slim) {
   const p = slim.pricing;
@@ -79,9 +91,13 @@ export function withSlimPricing(slim) {
   }
   if (p.tcgplayer && typeof p.tcgplayer === 'object') {
     const tcg = {};
-    for (const v of TCGPLAYER_VARIANT_KEYS) {
-      const market = p.tcgplayer[v]?.market;
-      if (typeof market === 'number') tcg[v] = { market };
+    // Pass through every variant object that carries a numeric market —
+    // not a fixed key-list — so vintage variants (1stEdition, unlimited)
+    // and any future TCGplayer variant survive without another sync bug.
+    for (const [variant, obj] of Object.entries(p.tcgplayer)) {
+      if (obj && typeof obj === 'object' && typeof obj.market === 'number') {
+        tcg[variant] = { market: obj.market };
+      }
     }
     // Keep the marketplace URL alongside prices so the frontend can
     // build a TCGplayer-affiliate buy button without a second fetch.
@@ -96,6 +112,24 @@ export function withSlimPricing(slim) {
     if (typeof p.cardmarket.url === 'string') cm.url = p.cardmarket.url;
     if (Object.keys(cm).length) pruned.cardmarket = cm;
   }
+  // JP retail chain (FX-converted USD). pickPrice gates these on
+  // price_source so they never surface for non-JP cards; carrying them
+  // here is safe — the frontend still honours the source gate.
+  for (const key of ['yuyutei', 'hareruya']) {
+    const usd = p[key]?.price_usd;
+    if (typeof usd === 'number') pruned[key] = { price_usd: usd };
+  }
+  // eBay consensus (price_source ebay_jp / ebay_us).
+  if (typeof p.ebay?.price_usd === 'number') {
+    pruned.ebay = { price_usd: p.ebay.price_usd };
+  }
+  // NOTE: pricecharting is deliberately NOT carried yet. A name-vs-slug
+  // audit (2026-05-31) found 169 of 1,549 pricecharting-sourced JA rows
+  // are wrong-card conflations (e.g. ADV2-33 Sandshrew priced from a
+  // regice-gold-star slug at $430). Enabling pricecharting display before
+  // running data/backfill/pricecharting_conflation_cleanup.sql would show
+  // those wrong prices. Re-add this block (+ the pickPrice branch in
+  // normalize/ptcg.js) once the cleanup has been applied to D1.
   return { ...slim, pricing: pruned };
 }
 
@@ -115,7 +149,10 @@ export function registerPokemonCardRoutes(app) {
     // API keys on full URL, so a different _v query param creates a
     // distinct entry and the old one ages out naturally.
     //   v2 (2026-05-07): JA queries now JOIN to EN for name_en alias
-    baseUrl.searchParams.set('_v', '2');
+    //   v3 (2026-05-31): withSlimPricing now carries yuyutei/hareruya/ebay/
+    //     pricecharting + all tcgplayer variant keys (was dropping ~6.3k JA
+    //     prices the frontend could render)
+    baseUrl.searchParams.set('_v', '3');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {

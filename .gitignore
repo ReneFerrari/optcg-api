@@ -30,3 +30,6 @@ node_modules/
 docs/superpowers/
 data/.ebay_token.json
 graphify-out/
+
+# JA pricing probe fixtures (2026-05-31 source sweep) — safe to delete after follow-up
+scratch_ja_probe/
