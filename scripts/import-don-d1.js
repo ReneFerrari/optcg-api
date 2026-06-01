@@ -42,6 +42,19 @@ for (const c of cards) {
   );
 }
 
+// Snapshot a price-history point so DON cards accrue weekly history like
+// regular cards. DON go through this separate importer (not
+// import-prices-d1.js, which writes the same row for the TCGPlayer path),
+// so without this DON history froze at the one-time backfill and the
+// PriceHistoryChart never rendered for DON. INSERT OR IGNORE dedupes within
+// a snapshot (matches the regular importer's pattern + unique card_id+captured_at).
+for (const c of cards) {
+  if (c.price === null || c.price === undefined) continue;
+  lines.push(
+    `INSERT OR IGNORE INTO card_price_history (card_id, price, captured_at) VALUES (${escSql(c.id)}, ${escSql(c.price)}, ${escSql(c.price_updated_at)});`
+  );
+}
+
 console.log(`Total statements: ${lines.length}`);
 
 const BATCH_SIZE = 900;
