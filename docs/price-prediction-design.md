@@ -12,11 +12,13 @@ Measured the existing price-history tables in D1 (`optcg-cards`) on 2026-06-01:
 
 | Table | rows | cards | window | snapshots |
 |---|---|---|---|---|
-| `card_price_history` (OPTCG) | 30,547 | 4,576 | 2026-04-17 → 2026-06-01 | **8 distinct weekly days** |
-| `ptcg_price_history` (PTCG) | ~0 / barely seeded | — | — | effectively none |
+| `card_price_history` (OPTCG, col `captured_at`) | 30,547 | 4,576 | 2026-04-17 → 2026-06-01 | **8 distinct weekly days** |
+| `ptcg_price_history` (PTCG, col `recorded_at`) | 1,050,497 | 38,779 | 2026-05-16 → 2026-06-01 | **5 distinct weekly days** |
 
-That is **~8 weekly points per card over ~6 weeks** for OPTCG, and less for
-PTCG. A trained forecaster (LightGBM/LSTM/ARIMA) on 6–8 points would overfit
+Both tables ARE capturing weekly (the PTCG one started ~May 16; it is NOT
+empty — an earlier scare was just a `captured_at` vs `recorded_at` column-name
+mismatch). The blocker is DEPTH: **~8 weekly points/card (OPTCG), ~5 (PTCG)**.
+A trained forecaster (LightGBM/LSTM/ARIMA) on 5–8 points would overfit
 and emit confident-looking numbers detached from reality — the exact
 plausible-but-wrong output the pricing honesty rail forbids
 ([[feedback-no-plausible-wrong-prices]]). **A forecast on this much data would
@@ -29,9 +31,10 @@ trainable later + ship only the honest, data-justified piece now.
 ## What to build NOW (justified by current data, no model training)
 
 1. **Keep accumulating history** — the weekly TCGPlayer refresh (OPTCG) and the
-   PTCG refresh DAG already append to `*_price_history`. Verify PTCG is
-   actually writing snapshots (the table looked empty — likely the only real
-   bug to fix here). This is the single most valuable action: time is the input.
+   PTCG refresh DAG already append to `*_price_history` (both confirmed
+   capturing weekly). This is the single most valuable action: time is the input.
+   (DON cards were the one real gap — they went through import-don-d1.js which
+   didn't write history; fixed 2026-06-01 to mirror import-prices-d1.js.)
 2. **Momentum indicator (honest, not a forecast)** — Δ% over the available
    window + direction, computed from `*_price_history`. Label it "recent trend"
    / "30-day change", NEVER "prediction". Surfacable in the existing
