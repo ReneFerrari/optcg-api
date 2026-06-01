@@ -40,6 +40,21 @@ price as `item-price …円`). Its categories — **ADV・PCG / VS・web・eカ�
 ~2,113 SKUs, raw (0 PSA). This was validated in the 2026-05-31 sweep but never
 ingested (Fullahead promo got done; Treca + gamepedia did not).
 
+### Confirmed site structure (recon 2026-06-01)
+- **cat01 = ポケモンカード** — all Pokémon, RAW singles, 50 products/page,
+  paginated. Product block: `<p class="item-name"><a href="/view/item/{12-digit-id}">NAME</a>`
+  + `class="item-price">…円`. Crawl = cat01 pages 1..N.
+- **ct109 = 鑑定品 (graded/PSA) is a SEPARATE category** → crawling cat01 only
+  yields raw singles, sidestepping the graded-vs-raw trap (Torecacamp lesson).
+- cat02/03/04 + other ctNNN = other games (Yu-Gi-Oh / One Piece / Union Arena /
+  Weiss / hololive / Gundam) — ignore. The named era sub-cats from the May sweep
+  aren't in the current top nav (site reorganized); filter cat01 to vintage by
+  parsed set/era hints in the product name instead.
+- **The hard part = parse `(name, set, number, printing)` out of the Japanese
+  product NAME.** This is the conflation-risk surface — build it with TDD +
+  spot-checks before any write. Measurement step can name-match for an upper-bound
+  overlap; the WRITER must match strictly on set+number+name.
+
 ### Ingester scope (mirror the yuyutei/hareruya/fullahead shared-lib pattern)
 1. **Measure overlap FIRST** — crawl Treca's vintage category pages, parse
    (name, set hint, number, 円 price), and match against our 2,009 vintage
