@@ -121,6 +121,13 @@ export function withSlimPricing(slim) {
     const usd = p[key]?.price_usd;
     if (typeof usd === 'number') pruned[key] = { price_usd: usd };
   }
+  // Yahoo Auctions "last sold" (aucfree). Real sold transaction + date for
+  // thin-market promos/vintage no other source carries. Carries last_date
+  // so the frontend can render it as "last sold $X (date)" rather than a
+  // live market price.
+  if (typeof p.yahoo_sold?.price_usd === 'number') {
+    pruned.yahoo_sold = { price_usd: p.yahoo_sold.price_usd, last_date: p.yahoo_sold.last_date ?? null };
+  }
   // eBay consensus (price_source ebay_jp / ebay_us).
   if (typeof p.ebay?.price_usd === 'number') {
     pruned.ebay = { price_usd: p.ebay.price_usd };
@@ -163,7 +170,7 @@ export function registerPokemonCardRoutes(app) {
     //     chase promos; 171 wrong-card conflations excluded via module)
     //   v5 (2026-05-31): withSlimPricing now carries fullahead (226 promo
     //     prices applied to D1) alongside yuyutei/hareruya
-    baseUrl.searchParams.set('_v', '5');
+    baseUrl.searchParams.set('_v', '6');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {
