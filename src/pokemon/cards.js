@@ -46,7 +46,11 @@ export function rowToSlim(row) {
     stage: row.stage,
     variants: row.variants_json ? JSON.parse(row.variants_json) : {},
     image_high: row.image_high,
-    image_low: row.image_low,
+    // image_low intentionally dropped from the slim payload (2026-06-02): its
+    // only frontend consumer was a redundant extractSeries() fallback in
+    // normalize/ptcg.js (image_high always wins when present), and it was 12.6%
+    // of the 11.5 MB JA index. Saves parse + IndexedDB-write cost for PTCG-JA
+    // users. The per-card detail endpoint still returns the full row.
     pricing: row.pricing_json ? JSON.parse(row.pricing_json) : {},
     price_source: row.price_source ?? null,
     dominant_color: row.dominant_color,
@@ -172,7 +176,9 @@ export function registerPokemonCardRoutes(app) {
     //     prices applied to D1) alongside yuyutei/hareruya
     //   v7 (2026-06-02): withSlimPricing now carries treca (Treca Sunrise
     //     vintage/secret-rare retail, 55 rows) — JP retail chain
-    baseUrl.searchParams.set('_v', '7');
+    //   v8 (2026-06-02): dropped image_low from slim payload (-12.6%, ~1.45 MB
+    //     of the JA index) — redundant series fallback, image_high suffices
+    baseUrl.searchParams.set('_v', '8');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {
