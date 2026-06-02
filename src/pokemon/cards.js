@@ -117,7 +117,7 @@ export function withSlimPricing(slim) {
   // JP retail chain (FX-converted USD). pickPrice gates these on
   // price_source so they never surface for non-JP cards; carrying them
   // here is safe — the frontend still honours the source gate.
-  for (const key of ['yuyutei', 'hareruya', 'fullahead']) {
+  for (const key of ['yuyutei', 'hareruya', 'fullahead', 'treca']) {
     const usd = p[key]?.price_usd;
     if (typeof usd === 'number') pruned[key] = { price_usd: usd };
   }
@@ -170,7 +170,9 @@ export function registerPokemonCardRoutes(app) {
     //     chase promos; 171 wrong-card conflations excluded via module)
     //   v5 (2026-05-31): withSlimPricing now carries fullahead (226 promo
     //     prices applied to D1) alongside yuyutei/hareruya
-    baseUrl.searchParams.set('_v', '6');
+    //   v7 (2026-06-02): withSlimPricing now carries treca (Treca Sunrise
+    //     vintage/secret-rare retail, 55 rows) — JP retail chain
+    baseUrl.searchParams.set('_v', '7');
     const cacheKey = new Request(baseUrl.toString(), { method: 'GET' });
     if (refresh) await cache.delete(cacheKey);
     else {

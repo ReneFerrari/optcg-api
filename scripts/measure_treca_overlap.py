@@ -119,7 +119,10 @@ def main():
         "name_overlap": len(covered),
         "products": products[:500],
     }, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"saved -> {OUT}")
+    # Full catalog for the ingester (all products, not just the 500 sample).
+    Path("data/backfill/treca_catalog.json").write_text(
+        json.dumps(products, ensure_ascii=False), encoding="utf-8")
+    print(f"saved -> {OUT}  + full catalog ({len(products)}) -> data/backfill/treca_catalog.json")
 
 
 if __name__ == "__main__":
