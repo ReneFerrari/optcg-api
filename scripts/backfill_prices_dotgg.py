@@ -25,17 +25,49 @@ import json
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
+# HTTP statuses worth retrying — gateway/upstream blips, not client errors.
+TRANSIENT_STATUS = {408, 429, 500, 502, 503, 504}
 
-def _fetch_json(url: str):
+
+def _fetch_json(url: str, *, max_retries: int = 4, timeout: int = 30):
+    """GET ``url`` and parse JSON, retrying transient failures with exponential
+    backoff (same convention as scripts.ebay_client.search).
+
+    dotgg.gg occasionally returns a 504 Gateway Timeout mid-pagination; a single
+    blip used to crash the whole weekly refresh (run 27544367223, 2026-06-15).
+    We retry 5xx/408/429 and connection/timeout errors, sleeping 2**attempt
+    seconds between tries. Non-transient HTTP errors (e.g. 403/404 — the endpoint
+    moved or blocked us) raise immediately so we don't hammer a dead URL. After
+    ``max_retries`` transient failures we raise loudly so a genuine outage still
+    surfaces instead of being silently swallowed.
+    """
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read())
+    last_err: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            if e.code not in TRANSIENT_STATUS:
+                raise  # client/endpoint error — fail fast, don't retry
+            last_err = e
+        except (urllib.error.URLError, TimeoutError) as e:
+            last_err = e
+        if attempt < max_retries - 1:
+            wait = 2 ** attempt
+            print(f"  dotgg fetch transient error ({last_err}); "
+                  f"retry {attempt + 1}/{max_retries - 1} in {wait}s")
+            time.sleep(wait)
+    raise RuntimeError(
+        f"dotgg fetch failed after {max_retries} attempts: {last_err}"
+    ) from last_err
 
 DOTGG_BASE = "https://api.dotgg.gg/cgfw"
 
