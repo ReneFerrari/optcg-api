@@ -23,8 +23,6 @@ import json
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
-from PIL import Image
-import io
 
 API_BASE = "https://optcg-api.arjunbansal-ai.workers.dev"
 TARGET_MIN_WIDTH = 700  # cards narrower than this look blurry when enlarged
@@ -32,7 +30,22 @@ TARGET_MIN_WIDTH = 700  # cards narrower than this look blurry when enlarged
 DATA = Path("data")
 
 
+def load_pdf_image_map(data_dir: Path = DATA) -> list:
+    """Load the set_id-tagged PDF image catalog used to suggest upgrade paths
+    for low-res DONs. This is a one-off curation artifact and is gitignored, so
+    it is absent in CI. Return an empty list when missing rather than crashing
+    the (continue-on-error) audit; without it we just can't tell CAN_UPGRADE_PDF
+    from STUCK_NO_SOURCE.
+    """
+    p = data_dir / "don_image_map.json"
+    if not p.exists():
+        return []
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
 def probe(don_id: str) -> tuple[int, int] | None:
+    from PIL import Image
+    import io
     try:
         req = urllib.request.Request(
             f"{API_BASE}/images/{don_id}",
@@ -47,7 +60,9 @@ def probe(don_id: str) -> tuple[int, int] | None:
 
 def main() -> None:
     cards = json.loads((DATA / "don_cards.json").read_text(encoding="utf-8"))
-    pdf_imgs = json.loads((DATA / "don_image_map.json").read_text(encoding="utf-8"))
+    pdf_imgs = load_pdf_image_map()
+    if not pdf_imgs:
+        print("note: data/don_image_map.json not present; skipping PDF-upgrade-path analysis")
     mapping = json.loads((DATA / "don_image_mapping.json").read_text(encoding="utf-8"))
 
     pdf_by_set: dict[str, list[str]] = defaultdict(list)
