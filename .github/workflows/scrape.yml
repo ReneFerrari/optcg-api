@@ -1,13 +1,15 @@
-name: Weekly Card Scrape
+name: Scrape & sync cards
 
 on:
   schedule:
-    - cron: '0 6 * * 1' # Every Monday at 6am UTC
-  workflow_dispatch: # Allow manual trigger
+    - cron: '0 8 1 * *'   # 1st of every month, 8am UTC
+  workflow_dispatch:        # manual trigger
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
 
@@ -15,180 +17,17 @@ jobs:
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Install Python dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install playwright
-          playwright install chromium
+      - name: Install Playwright browser
+        run: playwright install chromium --with-deps
 
-      - name: Install Node dependencies
-        run: npm install
-
-      - name: Run scraper
+      - name: Scrape cards
         run: python scraper.py
 
-      - name: Classify variants
-        run: python classify_variants.py
-
-      - name: Import to D1
+      - name: Import to Supabase
+        run: python import_supabase.py
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/import-d1.js
-
-      # JP-exclusive variants aren't on en.onepiece-cardgame.com so the
-      # main scraper misses them. This step reads the curated JSON seed
-      # and inherits name/colors/stats from the base card already in D1.
-      # Runs AFTER import-d1 so the base rows exist to inherit from.
-      - name: Import JP-exclusive variants
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/import-jp-exclusives.js
-
-      - name: Scrape TCGPlayer prices
-        run: python scripts/scrape_tcgplayer_prices_pw.py
-
-      # dotgg provides the authoritative tcg_id <-> card_id map. Without it,
-      # we'd have to guess which TCGPlayer product corresponds to _p8 vs _p6
-      # positionally, which misassigns prices when TCGPlayer interleaves cheap
-      # promo variants with expensive alt-arts.
-      - name: Fetch dotgg catalog
-        run: python scripts/fetch_dotgg_catalog.py
-
-      - name: Build price catalog
-        run: python scripts/build_all_prices.py
-
-      - name: Import prices to D1
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/import-prices-d1.js
-
-      - name: Build DON catalog
-        run: python scripts/build_don_cards.py
-
-      - name: Import DONs to D1
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/import-don-d1.js
-
-      # Pulls each DON's TCGPlayer product image, flood-fills white corners
-      # to transparent, applies a rounded-rectangle card mask, uploads to R2
-      # under cards/DON-NNN.png. Skips any DON already curated from the high-res
-      # PDF extraction (data/don_image_mapping.json).
-      - name: Refresh DON images in R2
-        continue-on-error: true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          pip install Pillow
-          python scripts/clean_and_upload_tcg_dons.py
-
-      # Report any DONs whose served image is below the readable-when-enlarged
-      # threshold (700px wide). TCGPlayer sometimes only has low-res scans of
-      # older promo products — those show up here as STUCK_NO_SOURCE and need
-      # PDF curation or alternate sourcing.
-      - name: Audit DON image resolutions
-        continue-on-error: true
-        run: python scripts/audit_don_resolution.py
-
-      # Fallback source for cards TCGPlayer doesn't list (promo parallels,
-      # event-only reprints). Only writes to rows where price IS NULL, so it
-      # never overwrites a TCGPlayer or manual price.
-      - name: Backfill missing prices from dotgg.gg
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: python scripts/backfill_prices_dotgg.py
-
-      # Third-tier backfill: eBay Browse API for cards dotgg also missed.
-      # Only writes to rows where price IS NULL (respects TCGPlayer + dotgg).
-      # Stamps price_source='ebay'. See docs/superpowers/specs/
-      # 2026-04-21-ebay-api-integration-design.md for the defense model
-      # (title filters, consensus requirement, trimmed median).
-      - name: Backfill missing prices from eBay
-        continue-on-error: true
-        env:
-          EBAY_APP_ID: ${{ secrets.EBAY_APP_ID }}
-          EBAY_CERT_ID: ${{ secrets.EBAY_CERT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: python -m scripts.backfill_prices_ebay
-
-      # Last-resort: web search for anything still unpriced. Uses Firecrawl
-      # search (~20 credits/week — well under the free tier). Non-blocking so
-      # a missing API key or credit exhaustion doesn't fail the whole run.
-      - name: Web-search fallback for remaining gaps
-        continue-on-error: true
-        env:
-          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: python scripts/backfill_prices_web.py
-
-      # Manual overrides always win — runs last, stamps price_source='manual',
-      # and TCGPlayer/dotgg imports above skip rows with that tag on future
-      # runs. Edit data/manual_prices.json to add or update entries.
-      - name: Apply manual price overrides
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: node scripts/import-manual-prices.js
-
-      # Coverage snapshot — same pattern as ptcg-refresh.yml, so silently-
-      # failing sources show up in the workflow summary instead of hiding
-      # behind continue-on-error.
-      - name: Report OPTCG pricing coverage
-        id: coverage
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          SQL="SELECT COUNT(*) AS total, SUM(CASE WHEN price IS NOT NULL THEN 1 ELSE 0 END) AS priced FROM cards"
-          OUT=$(npx wrangler d1 execute optcg-cards --remote --json --command "$SQL" 2>&1 || echo '{}')
-          echo "$OUT"
-          PRICED=$(echo "$OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); rows=d[0]['results'] if isinstance(d,list) else d.get('results',[]); print(rows[0].get('priced',0) if rows else 0)" 2>/dev/null || echo 0)
-          TOTAL=$(echo "$OUT" | python3 -c "import json,sys; d=json.load(sys.stdin); rows=d[0]['results'] if isinstance(d,list) else d.get('results',[]); print(rows[0].get('total',0) if rows else 0)" 2>/dev/null || echo 0)
-          echo "priced=$PRICED" >> "$GITHUB_OUTPUT"
-          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
-          echo "## OPTCG coverage" >> "$GITHUB_STEP_SUMMARY"
-          echo "Priced: $PRICED / $TOTAL" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Purge Cloudflare edge cache
-        continue-on-error: true
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-        run: |
-          if [ -z "$CLOUDFLARE_ZONE_ID" ]; then
-            echo "CLOUDFLARE_ZONE_ID not set — skipping cache purge"; exit 0
-          fi
-          curl -sX POST "https://api.cloudflare.com/client/v4/zones/$CLOUDFLARE_ZONE_ID/purge_cache" \
-            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d '{"prefixes":["optcg-api.arjunbansal-ai.workers.dev/cards/","optcg-api.arjunbansal-ai.workers.dev/sets/"]}'
-          echo
-
-      - name: Notify Discord
-        if: always()
-        continue-on-error: true
-        env:
-          DISCORD_CRON_WEBHOOK: ${{ secrets.DISCORD_CRON_WEBHOOK }}
-          PRICED: ${{ steps.coverage.outputs.priced }}
-          TOTAL: ${{ steps.coverage.outputs.total }}
-        run: |
-          if [ -z "$DISCORD_CRON_WEBHOOK" ]; then
-            echo "DISCORD_CRON_WEBHOOK not set — skipping"; exit 0
-          fi
-          STATUS_ICON=$([ "${{ job.status }}" = "success" ] && echo ":white_check_mark:" || echo ":warning:")
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          curl -sX POST "$DISCORD_CRON_WEBHOOK" \
-            -H "Content-Type: application/json" \
-            -d "{\"content\":\"$STATUS_ICON Weekly OPTCG scrape finished\\nPriced: \`${PRICED:-?}/${TOTAL:-?}\`\\n<$RUN_URL>\"}"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
