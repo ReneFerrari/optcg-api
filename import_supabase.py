@@ -13,7 +13,7 @@ with open("data/cards.json", encoding="utf-8") as f:
 batch_size = 500
 for i in range(0, len(cards), batch_size):
     batch = cards[i:i+batch_size]
-    supabase.table("cards").upsert(batch).execute()
+    supabase.table("cards").upsert(batch, on_conflict="id,set_id").execute()
     print(f"Upserted {min(i+batch_size, len(cards))}/{len(cards)}")
 
 print("Done.")
