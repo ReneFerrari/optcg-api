@@ -6,3 +6,5 @@ httpx
 beautifulsoup4
 pytest
 respx
+playwright
+supabase
