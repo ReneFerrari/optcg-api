@@ -14,8 +14,13 @@ Output: data/cards.json + data/sets.json + data/cards_<set>.json per set
 import asyncio
 import json
 import re
+import io
+import os
 from pathlib import Path
 from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeout
+from supabase import create_client
+from PIL import Image
+import httpx
 
 # ── Config ────────────────────────────────────────────────────────────────────
 BASE_URL  = "https://en.onepiece-cardgame.com/cardlist/"
@@ -23,6 +28,13 @@ OUT_DIR   = Path("data")
 NAV_TO    = 30_000   # navigation timeout ms
 SET_DELAY = 1.0      # seconds between sets
 HEADLESS  = True     # False = watch the browser
+
+BUCKET       = "card-images"
+SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+STORAGE_BASE = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET}"
+
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ── Lookup tables (validated against live site) ───────────────────────────────
 
@@ -54,24 +66,20 @@ EXTRACT_JS = """
 () => {
   const cards = [];
 
-  // There is ONE .resultCol container holding all cards.
-  // Iterate dl.modalCol directly; the image <a> is always previousElementSibling.
   document.querySelectorAll('dl.modalCol').forEach(dl => {
     if (!dl.id) return;
 
-    // ── Identity ─────────────────────────────────────────────────────────────
-    const id       = dl.id;                         // "OP01-001" or "OP01-001_p1"
+    const id       = dl.id;
     const parallel = /_[pr]\\d+$/.test(id);
     const base_id  = parallel ? id.replace(/_[pr]\\d+$/, '') : null;
     const variant_type = !parallel ? null : /_r\\d+$/.test(id) ? 'Reprint' : 'Alternate Art';
 
     const spans    = [...dl.querySelectorAll('dt .infoCol span')];
-    const rarityRaw   = spans[1]?.textContent.trim()  || null;  // "L", "C", "SR"…
-    const categoryRaw = spans[2]?.textContent.trim()  || null;  // "LEADER", "CHARACTER"…
+    const rarityRaw   = spans[1]?.textContent.trim()  || null;
+    const categoryRaw = spans[2]?.textContent.trim()  || null;
     const name        = dl.querySelector('.cardName')?.textContent.trim() || null;
 
-    // ── Image URL (absolute, no cache-busting query string) ──────────────────
-    const imgLink = dl.previousElementSibling;       // <a class="modalOpen">
+    const imgLink = dl.previousElementSibling;
     const img     = imgLink?.querySelector('img');
     const rawSrc  = img?.getAttribute('data-src') || img?.getAttribute('src') || '';
     const image_url = rawSrc
@@ -79,11 +87,9 @@ EXTRACT_JS = """
           + rawSrc.replace(/^\\.\\.\\//, '').split('?')[0]
       : `https://en.onepiece-cardgame.com/images/cardlist/card/${id}.png`;
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
     const dd = dl.querySelector('dd')?.cloneNode(true);
     if (!dd) return;
 
-    // Get raw text of a field, stripping its <h3> label
     const raw = sel => {
       const el = dd.querySelector(sel);
       if (!el) return null;
@@ -91,20 +97,6 @@ EXTRACT_JS = """
       return el.textContent.replace(/\\s+/g, ' ').trim() || null;
     };
 
-    // Parse "Red/Yellow" → ["Red","Yellow"],  "-" or null → null
-    const toArr = str => {
-      if (!str || str === '-') return null;
-      return str.split('/').map(s => s.trim()).filter(Boolean);
-    };
-
-    // Parse numeric fields: "5000" → 5000,  "-" or null → null
-    const toInt = str => {
-      if (!str || str === '-') return null;
-      const n = parseInt(str.replace(/[^0-9]/g, ''), 10);
-      return isNaN(n) ? null : n;
-    };
-
-    // Effect: convert <br> → newline, strip remaining tags
     const effectEl = dd.querySelector('.text');
     let effect = null;
     if (effectEl) {
@@ -126,20 +118,16 @@ EXTRACT_JS = """
     }
 
     cards.push({
-      id,
-      base_id,       // null for base cards; "OP01-001" for OP01-001_p1
-      parallel,
-      variant_type,
-      name,
-      rarity_raw:    rarityRaw,    // "L" — scraper maps this to full word
-      category_raw:  categoryRaw,  // "LEADER" — scraper maps this too
+      id, base_id, parallel, variant_type, name,
+      rarity_raw: rarityRaw,
+      category_raw: categoryRaw,
       image_url,
-      colors_raw:    raw('.color'),          // "Red/Yellow" — split below
-      cost_raw:      raw('.cost'),           // "5" or "4" (Life for Leaders)
-      power_raw:     raw('.power'),          // "5000"
-      counter_raw:   raw('.counter'),        // "1000" or "-"
+      colors_raw:     raw('.color'),
+      cost_raw:       raw('.cost'),
+      power_raw:      raw('.power'),
+      counter_raw:    raw('.counter'),
       attributes_raw: dd.querySelector('.attribute i')?.textContent.trim() || null,
-      types_raw:     raw('.feature'),        // "Supernovas/Straw Hat Crew"
+      types_raw:      raw('.feature'),
       effect,
       trigger,
     });
@@ -149,9 +137,37 @@ EXTRACT_JS = """
 }
 """
 
+# ── Thumbnail helpers ─────────────────────────────────────────────────────────
+
+def already_uploaded(card_id: str) -> bool:
+    try:
+        files = supabase.storage.from_(BUCKET).list(prefix=card_id)
+        return any(f["name"] == f"{card_id}.webp" for f in files)
+    except:
+        return False
+
+def make_and_upload_thumbnail(card_id: str, image_url: str) -> str | None:
+    try:
+        response = httpx.get(image_url, timeout=10, follow_redirects=True)
+        response.raise_for_status()
+        img = Image.open(io.BytesIO(response.content))
+        img = img.convert("RGB")
+        img.thumbnail((200, 200), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="WEBP", quality=80)
+        supabase.storage.from_(BUCKET).upload(
+            f"{card_id}.webp",
+            buf.getvalue(),
+            {"content-type": "image/webp", "upsert": "true"}
+        )
+        return f"{STORAGE_BASE}/{card_id}.webp"
+    except Exception as e:
+        print(f"    ⚠ thumb failed {card_id}: {e}")
+        return None
+
+# ── Card processing ───────────────────────────────────────────────────────────
 
 def clean_card(raw: dict, set_id: str, pack_id: str) -> dict:
-    """Convert raw string fields to typed, schema-correct values."""
     rarity   = RARITY_MAP.get(raw["rarity_raw"] or "", raw["rarity_raw"])
     category = CATEGORY_MAP.get(raw["category_raw"] or "", raw["category_raw"])
 
@@ -166,7 +182,6 @@ def clean_card(raw: dict, set_id: str, pack_id: str) -> dict:
         m = re.search(r"\d+", val)
         return int(m.group()) if m else None
 
-    # Determine finish based on rarity and variant
     vt = raw.get("variant_type")
     if vt in ("Alternate Art", "Manga Art", "Serial"):
         fin = "textured"
@@ -182,27 +197,36 @@ def clean_card(raw: dict, set_id: str, pack_id: str) -> dict:
         fin = "standard"
 
     return {
-        "id":         raw["id"],
-        "base_id":    raw["base_id"],
-        "parallel":   raw["parallel"],
+        "id":           raw["id"],
+        "base_id":      raw["base_id"],
+        "parallel":     raw["parallel"],
         "variant_type": raw.get("variant_type"),
-        "name":       raw["name"],
-        "set_id":     set_id,
-        "pack_id":    pack_id,
-        "rarity":     rarity,
-        "finish":     fin,
-        "category":   category,
-        "image_url":  raw["image_url"],
-        "colors":     split_arr(raw["colors_raw"]),        # ["Red", "Yellow"]
-        "cost":       to_int(raw["cost_raw"]),             # 5  (int)
-        "power":      to_int(raw["power_raw"]),            # 5000 (int)
-        "counter":    to_int(raw["counter_raw"]),          # 1000 or null
-        "attributes": split_arr(raw["attributes_raw"]),    # ["Slash"]
-        "types":      split_arr(raw["types_raw"]),         # ["Supernovas","Straw Hat Crew"]
-        "effect":     raw["effect"],
-        "trigger":    raw["trigger"],
+        "name":         raw["name"],
+        "set_id":       set_id,
+        "pack_id":      pack_id,
+        "rarity":       rarity,
+        "finish":       fin,
+        "category":     category,
+        "image_url":    raw["image_url"],
+        "colors":       split_arr(raw["colors_raw"]),
+        "cost":         to_int(raw["cost_raw"]),
+        "power":        to_int(raw["power_raw"]),
+        "counter":      to_int(raw["counter_raw"]),
+        "attributes":   split_arr(raw["attributes_raw"]),
+        "types":        split_arr(raw["types_raw"]),
+        "effect":       raw["effect"],
+        "trigger":      raw["trigger"],
+        "thumb":        None,  # filled in below
     }
 
+# ── Supabase upsert ───────────────────────────────────────────────────────────
+
+def upsert_cards(cards: list[dict]) -> None:
+    batch_size = 500
+    for i in range(0, len(cards), batch_size):
+        batch = cards[i:i+batch_size]
+        supabase.table("cards").upsert(batch).execute()
+        print(f"    💾 upserted {min(i+batch_size, len(cards))}/{len(cards)}")
 
 # ── Per-series scrape ─────────────────────────────────────────────────────────
 
@@ -212,12 +236,41 @@ async def scrape_series(page: Page, pack_id: str, set_id: str) -> list[dict]:
         wait_until="networkidle",
         timeout=NAV_TO,
     )
-    # state="attached" — modals are display:none by design, never "visible"
     await page.wait_for_selector("dl.modalCol", state="attached", timeout=NAV_TO)
-
     raw_cards: list[dict] = await page.evaluate(EXTRACT_JS)
-    return [clean_card(r, set_id, pack_id) for r in raw_cards]
+    cards = [clean_card(r, set_id, pack_id) for r in raw_cards]
 
+    # deduplicate within set by id
+    seen = {}
+    for card in cards:
+        seen[card["id"]] = card
+    cards = list(seen.values())
+
+    # thumbnail upload
+    uploaded = skipped = failed = 0
+    for card in cards:
+        card_id   = card["id"]
+        image_url = card["image_url"]
+        if already_uploaded(card_id):
+            card["thumb"] = f"{STORAGE_BASE}/{card_id}.webp"
+            skipped += 1
+        elif image_url:
+            thumb_url = make_and_upload_thumbnail(card_id, image_url)
+            card["thumb"] = thumb_url
+            if thumb_url:
+                uploaded += 1
+            else:
+                failed += 1
+        else:
+            card["thumb"] = None
+            failed += 1
+
+    print(f"    🖼  thumbs: {uploaded} uploaded, {skipped} skipped, {failed} failed")
+
+    # upsert this set to Supabase immediately
+    upsert_cards(cards)
+
+    return cards
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -249,7 +302,6 @@ async def main() -> None:
         )
         page = await ctx.new_page()
 
-        # ── Discover all series live from #series ──────────────────────────
         print("🔍  Reading series list...")
         await page.goto(BASE_URL, wait_until="networkidle", timeout=NAV_TO)
 
@@ -269,7 +321,6 @@ async def main() -> None:
             print(f"  [{mark}] {s['pack_id']}  {s['set_id']:15}  {s['label'][:55]}")
         print()
 
-        # ── One page load per set ──────────────────────────────────────────
         for s in all_series:
             set_id  = s["set_id"]
             pack_id = s["pack_id"]
@@ -297,7 +348,7 @@ async def main() -> None:
 
                 parallel = sum(1 for c in cards if c["parallel"])
                 base     = len(cards) - parallel
-                print(f"     ✅  {len(cards)} cards ({base} base + {parallel} parallel alt-art)")
+                print(f"     ✅  {len(cards)} cards ({base} base + {parallel} parallel)")
 
             except Exception as exc:
                 print(f"     ❌  {exc}")
@@ -323,9 +374,6 @@ async def main() -> None:
     print(f"\n🎉  {total} cards total  "
           f"({total - parallel} base + {parallel} parallel)  "
           f"across {len(scraped_sets)} sets.")
-    print(f"    data/cards.json")
-    print(f"    data/sets.json")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
