@@ -62,7 +62,7 @@ EXTRACT_JS = """
     // ── Identity ─────────────────────────────────────────────────────────────
     const id       = dl.id;                         // "OP01-001" or "OP01-001_p1"
     const parallel = /_[pr]\\d+$/.test(id);
-    const base_id  = parallel ? id.replace(/_[pr]\\d+$/, '') : null;
+    const base_id  = parallel ? id.replace(/_[pr]\\d+$/, '') : id;
     const variant_type = !parallel ? null : /_r\\d+$/.test(id) ? 'Reprint' : 'Alternate Art';
 
     const spans    = [...dl.querySelectorAll('dt .infoCol span')];
